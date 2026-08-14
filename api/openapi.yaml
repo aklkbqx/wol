@@ -1,0 +1,41 @@
+openapi: 3.1.0
+info:
+  title: WOL API
+  version: 0.1.0
+  description: Local-first Wake-on-LAN inventory and control API.
+servers:
+  - url: http://127.0.0.1:8787
+paths:
+  /healthz:
+    get:
+      responses:
+        '200':
+          description: Server is healthy
+  /api/v1/bootstrap:
+    get:
+      responses:
+        '200':
+          description: Initial UI data
+  /api/v1/devices/{id}/wake:
+    post:
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WakeRequest'
+      responses:
+        '200':
+          description: Wake attempt result
+components:
+  schemas:
+    WakeRequest:
+      type: object
+      properties:
+        verify: { type: boolean, default: false }
+        timeoutSeconds: { type: integer, minimum: 1, maximum: 300 }
+        repeat: { type: integer, minimum: 1, maximum: 10 }

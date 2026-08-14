@@ -1,0 +1,13 @@
+.DS_Store
+wol.db
+*.db
+*.db-shm
+*.db-wal
+dist/
+web/node_modules/
+web/.svelte-kit/
+web/build/
+web/.vite/
+.env
+.env.*
+!.env.example
