@@ -22,12 +22,14 @@ import (
 )
 
 type wakeDataMsg struct {
-	devices  []store.Device
-	sites    []store.Site
-	relays   []store.WakeRelay
-	profiles []store.RemoteProfile
-	history  []store.WakeAttempt
-	err      error
+	requestID uint64
+	kind      loadingKind
+	devices   []store.Device
+	sites     []store.Site
+	relays    []store.WakeRelay
+	profiles  []store.RemoteProfile
+	history   []store.WakeAttempt
+	err       error
 }
 
 type wakeResultMsg struct {
@@ -41,18 +43,45 @@ type remoteResultMsg struct {
 }
 
 type probeResultMsg struct {
-	deviceID string
-	status   string
-	err      error
+	requestID uint64
+	deviceID  string
+	status    string
+	err       error
 }
 
 type probeBatchMsg struct {
-	statuses map[string]string
-	summary  presence.Summary
-	err      error
+	requestID uint64
+	kind      loadingKind
+	statuses  map[string]string
+	summary   presence.Summary
+	err       error
 }
 
 type wakeTickMsg struct{}
+
+type viewPhase uint8
+
+const (
+	phaseReady viewPhase = iota
+	phaseBootLoading
+	phaseRefreshing
+	phaseCheckingMachine
+	phaseLoadError
+)
+
+type loadingKind string
+
+const (
+	loadingBoot    loadingKind = "boot"
+	loadingRefresh loadingKind = "refresh"
+)
+
+type loadingStage string
+
+const (
+	stageInventory loadingStage = "inventory"
+	stagePresence  loadingStage = "presence"
+)
 
 type formSavedMsg struct {
 	message string
@@ -98,6 +127,18 @@ type WakeModel struct {
 	profiles map[string]store.RemoteProfile
 	presence map[string]string
 	detector *presence.Detector
+	pending  *wakeDataMsg
+
+	phase         viewPhase
+	loadingKind   loadingKind
+	loadingStage  loadingStage
+	loadingTarget string
+	loadingError  string
+	requestID     uint64
+	loadContext   context.Context
+	loadCancel    context.CancelFunc
+	checkedAt     time.Time
+	stale         bool
 
 	loading        bool
 	waking         bool
@@ -127,19 +168,22 @@ func NewWakeModel(repository *store.Store, version, credit string) *WakeModel {
 		credit = buildinfo.Credit
 	}
 	return &WakeModel{
-		repository: repository,
-		service:    wakeservice.NewService(repository, wakeservice.Hooks{}),
-		version:    version,
-		credit:     credit,
-		theme:      DetectTheme(),
-		motion:     NewMotion(MotionEnabled()),
-		width:      80,
-		height:     24,
-		presence:   make(map[string]string),
-		profiles:   make(map[string]store.RemoteProfile),
-		detector:   presence.NewDetector(),
-		status:     "Loading local inventory...",
-		loading:    true,
+		repository:   repository,
+		service:      wakeservice.NewService(repository, wakeservice.Hooks{}),
+		version:      version,
+		credit:       credit,
+		theme:        DetectTheme(),
+		motion:       NewMotion(MotionEnabled()),
+		width:        80,
+		height:       24,
+		presence:     make(map[string]string),
+		profiles:     make(map[string]store.RemoteProfile),
+		detector:     presence.NewDetector(),
+		status:       "Loading local inventory...",
+		loading:      true,
+		phase:        phaseBootLoading,
+		loadingKind:  loadingBoot,
+		loadingStage: stageInventory,
 	}
 }
 
@@ -166,31 +210,54 @@ func RunWakeDesk(dbPath string) error {
 }
 
 func (m *WakeModel) Init() tea.Cmd {
-	return m.loadData()
+	return m.beginRefresh(loadingBoot)
 }
 
-func (m *WakeModel) loadData() tea.Cmd {
+func (m *WakeModel) beginRefresh(kind loadingKind) tea.Cmd {
+	if m.loadCancel != nil {
+		m.loadCancel()
+	}
+	m.requestID++
+	m.loadingKind = kind
+	m.loadingStage = stageInventory
+	m.loadingTarget = ""
+	m.loadingError = ""
+	m.pending = nil
+	m.loading = true
+	m.checking = false
+	if kind == loadingBoot {
+		m.phase = phaseBootLoading
+	} else {
+		m.phase = phaseRefreshing
+	}
+	m.status = "Reading local inventory..."
+	m.motion.Trigger(time.Now(), 30*time.Minute)
+	m.loadContext, m.loadCancel = context.WithCancel(context.Background())
+	return tea.Batch(m.loadData(m.loadContext, m.requestID, kind), m.motionTick())
+}
+
+func (m *WakeModel) loadData(parent context.Context, requestID uint64, kind loadingKind) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
 		devices, err := m.repository.ListDevices(ctx)
 		if err != nil {
-			return wakeDataMsg{err: err}
+			return wakeDataMsg{requestID: requestID, kind: kind, err: err}
 		}
 		sites, err := m.repository.ListSites(ctx)
 		if err != nil {
-			return wakeDataMsg{err: err}
+			return wakeDataMsg{requestID: requestID, kind: kind, err: err}
 		}
 		relays, err := m.repository.ListWakeRelays(ctx)
 		if err != nil {
-			return wakeDataMsg{err: err}
+			return wakeDataMsg{requestID: requestID, kind: kind, err: err}
 		}
 		history, err := m.repository.ListWakeAttempts(ctx, 80)
 		if err != nil {
-			return wakeDataMsg{err: err}
+			return wakeDataMsg{requestID: requestID, kind: kind, err: err}
 		}
 		profiles, err := m.repository.ListRemoteProfiles(ctx)
-		return wakeDataMsg{devices: devices, sites: sites, relays: relays, profiles: profiles, history: history, err: err}
+		return wakeDataMsg{requestID: requestID, kind: kind, devices: devices, sites: sites, relays: relays, profiles: profiles, history: history, err: err}
 	}
 }
 
@@ -202,25 +269,21 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m, m.handleKey(value)
 	case wakeDataMsg:
-		m.loading = false
+		if value.requestID != m.requestID {
+			return m, nil
+		}
 		if value.err != nil {
-			m.status = "Could not load the local inventory."
+			return m, m.failLoading("Could not read the local inventory.")
+		}
+		m.pending = &value
+		if len(value.devices) == 0 {
+			m.commitPending(nil, presence.Summary{})
 			return m, nil
 		}
-		m.devices, m.sites, m.relays, m.history = value.devices, value.sites, value.relays, value.history
-		m.profiles = make(map[string]store.RemoteProfile, len(value.profiles))
-		for _, profile := range value.profiles {
-			m.profiles[profile.DeviceID] = profile
-		}
-		if m.selected >= len(m.filteredDevices()) {
-			m.selected = max(0, len(m.filteredDevices())-1)
-		}
-		if len(m.devices) == 0 {
-			m.status = fmt.Sprintf("Inventory refreshed: %d machine(s), %d route(s).", len(m.devices), len(m.relays))
-			return m, nil
-		}
-		m.status = fmt.Sprintf("Inventory refreshed: %d machine(s), %d route(s). Checking power status...", len(m.devices), len(m.relays))
-		return m, m.startPresenceScan(m.devices)
+		m.loadingStage = stagePresence
+		m.checking = true
+		m.status = fmt.Sprintf("Checking power for %d machine(s)...", len(value.devices))
+		return m, m.startPresenceScan(value.devices, value.requestID, value.kind, m.loadContext)
 	case wakeResultMsg:
 		m.waking = false
 		m.actionCancel = nil
@@ -230,7 +293,7 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = fmt.Sprintf("Wake sent to %s via %s (%d packet(s)).", value.result.Device.Name, routeLabel(value.result.Route), value.result.Attempt.Packets)
 		}
-		return m, m.loadData()
+		return m, m.beginRefresh(loadingRefresh)
 	case remoteResultMsg:
 		m.opening = false
 		m.actionCancel = nil
@@ -246,26 +309,32 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case probeResultMsg:
+		if value.requestID != m.requestID {
+			return m, nil
+		}
 		m.checking = false
+		m.loading = false
+		m.phase = phaseReady
+		m.motion.Until = time.Time{}
+		m.finishLoadContext()
 		if value.err != nil {
 			m.status = "Status check failed: " + value.err.Error()
 		} else {
 			m.ensurePresence()
 			m.presence[value.deviceID] = value.status
+			m.checkedAt = time.Now()
+			m.stale = false
 			m.status = "Status updated: " + strings.ToUpper(value.status) + "."
 		}
 		return m, nil
 	case probeBatchMsg:
-		m.checking = false
-		if value.err != nil {
-			m.status = "Power scan failed: " + value.err.Error()
+		if value.requestID != m.requestID {
 			return m, nil
 		}
-		m.ensurePresence()
-		for deviceID, status := range value.statuses {
-			m.presence[deviceID] = status
+		if value.err != nil {
+			return m, m.failLoading("Power check failed.")
 		}
-		m.status = fmt.Sprintf("Power scan complete: %d online · %d offline · %d unknown. Wake readiness is shown separately.", value.summary.Online, value.summary.Offline, value.summary.Unknown)
+		m.commitPending(value.statuses, value.summary)
 		return m, nil
 	case wakeTickMsg:
 		if m.motion.Step(time.Now()) {
@@ -283,13 +352,104 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if value.keep {
 			return m, nil
 		}
-		return m, m.loadData()
+		return m, m.beginRefresh(loadingRefresh)
 	}
 	return m, nil
 }
 
+func (m *WakeModel) commitPending(statuses map[string]string, summary presence.Summary) {
+	if m.pending == nil {
+		return
+	}
+	data := m.pending
+	m.devices = append([]store.Device(nil), data.devices...)
+	m.sites = append([]store.Site(nil), data.sites...)
+	m.relays = append([]store.WakeRelay(nil), data.relays...)
+	m.history = append([]store.WakeAttempt(nil), data.history...)
+	m.profiles = make(map[string]store.RemoteProfile, len(data.profiles))
+	for _, profile := range data.profiles {
+		m.profiles[profile.DeviceID] = profile
+	}
+	m.presence = make(map[string]string, len(statuses))
+	for deviceID, status := range statuses {
+		m.presence[deviceID] = status
+	}
+	if m.selected >= len(m.filteredDevices()) {
+		m.selected = max(0, len(m.filteredDevices())-1)
+	}
+	m.pending = nil
+	m.phase = phaseReady
+	m.loading = false
+	m.checking = false
+	m.loadingError = ""
+	m.loadingTarget = ""
+	m.checkedAt = time.Now()
+	m.stale = false
+	m.motion.Until = time.Time{}
+	m.finishLoadContext()
+	if len(m.devices) == 0 {
+		m.status = fmt.Sprintf("Inventory ready: %d machine(s), %d route(s).", len(m.devices), len(m.relays))
+		return
+	}
+	m.status = fmt.Sprintf("Latest state ready: %d online · %d offline · %d unknown. Wake readiness is shown separately.", summary.Online, summary.Offline, summary.Unknown)
+}
+
+func (m *WakeModel) failLoading(message string) tea.Cmd {
+	wasBoot := m.phase == phaseBootLoading && len(m.devices) == 0
+	m.pending = nil
+	m.loading = false
+	m.checking = false
+	m.motion.Until = time.Time{}
+	m.finishLoadContext()
+	if wasBoot {
+		m.phase = phaseLoadError
+		m.loadingError = message
+		m.status = message
+		return nil
+	}
+	m.phase = phaseReady
+	m.stale = true
+	m.status = message + " Showing the last verified state. Press r to retry."
+	return nil
+}
+
+func (m *WakeModel) finishLoadContext() {
+	if m.loadCancel != nil {
+		m.loadCancel()
+	}
+	m.loadCancel = nil
+	m.loadContext = nil
+}
+
+func (m *WakeModel) cancelLoading() {
+	m.finishLoadContext()
+	m.requestID++
+	m.pending = nil
+	m.loading = false
+	m.checking = false
+	m.phase = phaseReady
+	m.motion.Until = time.Time{}
+	m.status = "Check cancelled. Showing the last verified state."
+}
+
 func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	keyName := msg.String()
+	if m.phase != phaseReady {
+		switch keyName {
+		case "q", "ctrl+c":
+			m.finishLoadContext()
+			return tea.Quit
+		case "r":
+			if m.phase == phaseLoadError {
+				return m.beginRefresh(loadingBoot)
+			}
+		case "esc":
+			if m.phase == phaseRefreshing || m.phase == phaseCheckingMachine {
+				m.cancelLoading()
+			}
+		}
+		return nil
+	}
 	if m.form != nil {
 		return m.handleFormKey(keyName)
 	}
@@ -378,9 +538,7 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return m.probeSelected()
 		}
 	case "r":
-		m.loading = true
-		m.status = "Refreshing local inventory..."
-		return m.loadData()
+		return m.beginRefresh(loadingRefresh)
 	case "a":
 		m.beginAdd()
 	case "e":
@@ -539,13 +697,10 @@ func (m *WakeModel) ensurePresence() {
 	}
 }
 
-func (m *WakeModel) startPresenceScan(devices []store.Device) tea.Cmd {
-	m.ensurePresence()
+func (m *WakeModel) startPresenceScan(devices []store.Device, requestID uint64, kind loadingKind, parent context.Context) tea.Cmd {
 	if len(devices) == 0 {
-		m.checking = false
 		return nil
 	}
-	m.checking = true
 	targets := make([]presence.Target, 0, len(devices))
 	for _, device := range devices {
 		targets = append(targets, presence.Target{
@@ -553,18 +708,20 @@ func (m *WakeModel) startPresenceScan(devices []store.Device) tea.Cmd {
 			IPAddress:  device.IPAddress,
 			VerifyPort: device.VerifyPort,
 		})
-		m.presence[device.ID] = "checking"
 	}
 	detector := m.presenceDetector()
+	if parent == nil {
+		parent = context.Background()
+	}
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 4*time.Second)
 		defer cancel()
 		result := detector.ProbeBatch(ctx, targets, 2500*time.Millisecond)
 		statuses := make(map[string]string, len(result.Results))
 		for _, item := range result.Results {
 			statuses[item.DeviceID] = string(item.Status)
 		}
-		return probeBatchMsg{statuses: statuses, summary: result.Summary}
+		return probeBatchMsg{requestID: requestID, kind: kind, statuses: statuses, summary: result.Summary}
 	}
 }
 
@@ -601,17 +758,28 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 	if port == 0 {
 		port = 3389
 	}
-	m.ensurePresence()
-	m.presence[device.ID] = "checking"
+	if m.loadCancel != nil {
+		m.loadCancel()
+	}
+	m.requestID++
+	m.phase = phaseCheckingMachine
+	m.loading = true
+	m.loadingStage = stagePresence
+	m.loadingTarget = device.Name
 	m.status = fmt.Sprintf("Checking power at %s:%d...", device.IPAddress, port)
 	detector := m.presenceDetector()
 	m.checking = true
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	m.motion.Trigger(time.Now(), 30*time.Minute)
+	m.loadContext, m.loadCancel = context.WithCancel(context.Background())
+	requestID := m.requestID
+	parent := m.loadContext
+	checkCmd := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
 		result := detector.Probe(ctx, presence.Target{DeviceID: device.ID, IPAddress: device.IPAddress, VerifyPort: port}, 2500*time.Millisecond)
-		return probeResultMsg{deviceID: device.ID, status: string(result.Status)}
+		return probeResultMsg{requestID: requestID, deviceID: device.ID, status: string(result.Status)}
 	}
+	return tea.Batch(checkCmd, m.motionTick())
 }
 
 func (m *WakeModel) beginAdd() {
@@ -933,10 +1101,13 @@ func (m *WakeModel) View() string {
 	}
 	inner := contentWidth(width)
 	mode := ResolveLayout(width, m.height)
+	if m.phase != phaseReady {
+		return m.renderLoadingView(inner, mode)
+	}
 	var builder strings.Builder
 	header := m.theme.title().Render("WOL WAKE DESK") + "  " + m.theme.muted().Render("v"+m.version+"  ·  Credit: "+m.credit)
 	builder.WriteString("\n" + fitText(header, inner))
-	meta := m.theme.muted().Render("LOCAL INVENTORY  ·  " + modeLabel(mode) + "  ·  " + time.Now().Format("15:04:05"))
+	meta := m.theme.muted().Render("LOCAL INVENTORY  ·  " + modeLabel(mode) + "  ·  " + m.freshnessText())
 	builder.WriteString("\n" + fitText(meta, inner) + "\n\n")
 	builder.WriteString(renderTabs(m.theme, m.tab, []string{"Machines", "Routes", "Activity"}, inner) + "\n")
 	builder.WriteString(m.renderRouteRail(inner) + "\n")
@@ -990,6 +1161,111 @@ func (m *WakeModel) View() string {
 	}
 	builder.WriteString("\n\n" + m.footer(inner) + "\n")
 	return builder.String()
+}
+
+func (m *WakeModel) freshnessText() string {
+	if m.checkedAt.IsZero() {
+		return "not checked yet"
+	}
+	if m.stale {
+		return "STALE · last checked " + m.checkedAt.Format("15:04:05")
+	}
+	return "checked " + m.checkedAt.Format("15:04:05")
+}
+
+func (m *WakeModel) renderLoadingView(width int, mode LayoutMode) string {
+	var builder strings.Builder
+	header := m.theme.title().Render("WOL WAKE DESK") + "  " + m.theme.muted().Render("v"+m.version+"  ·  Credit: "+m.credit)
+	builder.WriteString("\n" + fitText(header, width))
+	if m.phase == phaseLoadError {
+		builder.WriteString("\n" + fitText(m.theme.danger().Render("LOCAL INVENTORY  ·  LOAD FAILED"), width) + "\n\n")
+		builder.WriteString(fitText(m.theme.danger().Render(m.theme.Glyph("signal-failed")+" COULD NOT LOAD WAKE DESK"), width) + "\n\n")
+		message := m.loadingError
+		if message == "" {
+			message = "The local inventory could not be read."
+		}
+		builder.WriteString(fitText(message, width) + "\n")
+		builder.WriteString(fitText(m.theme.muted().Render("Your saved machines were not changed."), width) + "\n\n")
+		builder.WriteString(fitText(m.theme.accent().Render("[r] Retry")+m.theme.muted().Render("   [q] Quit"), width) + "\n")
+		return builder.String()
+	}
+
+	title := "CHECKING LATEST STATE"
+	contextLabel := "LOCAL INVENTORY"
+	if m.phase == phaseCheckingMachine {
+		title = "CHECKING POWER"
+		contextLabel = "LOCAL POWER CHECK"
+	} else if m.phase == phaseRefreshing {
+		contextLabel = "REFRESHING LOCAL INVENTORY"
+	}
+	builder.WriteString("\n" + fitText(m.theme.muted().Render(contextLabel+"  ·  "+modeLabel(mode)), width) + "\n\n")
+	builder.WriteString(fitText(m.theme.title().Render(title), width) + "\n")
+	if m.loadingTarget != "" {
+		builder.WriteString(fitText(m.theme.accent().Render(m.loadingTarget), width) + "\n")
+	}
+	builder.WriteString("\n" + fitText(m.loadingSignal(width), width) + "\n\n")
+
+	count := 0
+	if m.pending != nil {
+		count = len(m.pending.devices)
+	}
+	if mode != LayoutNarrow && width >= 36 {
+		inventoryGlyph, inventoryStyle := m.theme.Glyph("signal-busy"), m.theme.accent()
+		powerGlyph, powerStyle := m.theme.Glyph("signal-stopped"), m.theme.muted()
+		if m.loadingStage == stagePresence || m.phase == phaseCheckingMachine {
+			inventoryGlyph, inventoryStyle = m.theme.Glyph("check"), m.theme.success()
+			powerGlyph, powerStyle = m.theme.Glyph("signal-busy"), m.theme.accent()
+		}
+		builder.WriteString(fitText(inventoryStyle.Render(inventoryGlyph+" Local inventory"), width) + "\n")
+		powerText := "Power status"
+		if count > 0 {
+			powerText = fmt.Sprintf("Power status · %d machine(s)", count)
+		}
+		builder.WriteString(fitText(powerStyle.Render(powerGlyph+" "+powerText), width) + "\n")
+		builder.WriteString(fitText(m.theme.muted().Render(m.theme.Glyph("signal-stopped")+" Latest view waits for verification"), width) + "\n\n")
+	} else {
+		stage := "Reading inventory"
+		if m.loadingStage == stagePresence || m.phase == phaseCheckingMachine {
+			stage = "Checking power"
+			if count > 0 {
+				stage = fmt.Sprintf("Checking %d machines", count)
+			}
+		}
+		builder.WriteString(fitText(m.theme.accent().Render(m.theme.Glyph("signal-busy")+" "+stage), width) + "\n\n")
+	}
+
+	controls := "[q] Quit"
+	if m.phase == phaseRefreshing || m.phase == phaseCheckingMachine {
+		controls = "[Esc] Cancel   [q] Quit"
+	}
+	builder.WriteString(fitText(m.theme.muted().Render(controls), width) + "\n")
+	return builder.String()
+}
+
+func (m *WakeModel) loadingSignal(width int) string {
+	left, right := "LOCAL", "FLEET"
+	if m.phase == phaseCheckingMachine {
+		right = "TARGET"
+	}
+	railWidth := width - len(left) - len(right) - 2
+	if railWidth < 1 {
+		return m.theme.accent().Render(m.theme.Glyph("signal-busy") + " CHECKING")
+	}
+	railWidth = min(railWidth, 30)
+	railRune, signalRune := "─", "●"
+	if m.theme.ASCII {
+		railRune, signalRune = "-", "*"
+	}
+	position := railWidth / 2
+	if m.motion.Enabled && railWidth > 1 {
+		cycle := (railWidth - 1) * 2
+		position = int(m.frame % uint64(cycle))
+		if position >= railWidth {
+			position = cycle - position
+		}
+	}
+	rail := strings.Repeat(railRune, position) + signalRune + strings.Repeat(railRune, railWidth-position-1)
+	return m.theme.muted().Render(left+" ") + m.theme.accent().Render(rail) + m.theme.muted().Render(" "+right)
 }
 
 func (m *WakeModel) renderRouteRail(width int) string {
