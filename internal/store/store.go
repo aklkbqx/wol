@@ -42,7 +42,6 @@ type Device struct {
 	WakeStrategy     string `json:"wakeStrategy"`
 	WakeRelayID      string `json:"wakeRelayId,omitempty"`
 	VerifyPort       int    `json:"verifyPort"`
-	RemoteURL        string `json:"remoteUrl,omitempty"`
 	Description      string `json:"description"`
 	Enabled          bool   `json:"enabled"`
 	CreatedAt        string `json:"createdAt"`
@@ -74,11 +73,12 @@ type WakeAttempt struct {
 }
 
 type ExportData struct {
-	Version    int         `json:"version"`
-	Sites      []Site      `json:"sites"`
-	Devices    []Device    `json:"devices"`
-	Groups     []Group     `json:"groups"`
-	WakeRelays []WakeRelay `json:"wakeRelays,omitempty"`
+	Version        int             `json:"version"`
+	Sites          []Site          `json:"sites"`
+	Devices        []Device        `json:"devices"`
+	Groups         []Group         `json:"groups"`
+	WakeRelays     []WakeRelay     `json:"wakeRelays,omitempty"`
+	RemoteProfiles []RemoteProfile `json:"remoteProfiles,omitempty"`
 }
 
 func Open(path string) (*Store, error) {
@@ -132,7 +132,6 @@ CREATE TABLE IF NOT EXISTS devices (
 	wake_strategy TEXT NOT NULL DEFAULT 'broadcast',
 	wake_relay_id TEXT NOT NULL DEFAULT '',
   verify_port INTEGER NOT NULL DEFAULT 0,
-  remote_url TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -179,6 +178,20 @@ CREATE TABLE IF NOT EXISTS wake_relays (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS remote_profiles (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL UNIQUE,
+  protocol TEXT NOT NULL,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  verify_port INTEGER NOT NULL,
+  username_hint TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'browser-local',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
@@ -197,7 +210,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		{table: "devices", name: "platform", def: "TEXT NOT NULL DEFAULT 'unknown'"},
 		{table: "devices", name: "wake_strategy", def: "TEXT NOT NULL DEFAULT 'broadcast'"},
 		{table: "devices", name: "wake_relay_id", def: "TEXT NOT NULL DEFAULT ''"},
-		{table: "devices", name: "remote_url", def: "TEXT NOT NULL DEFAULT ''"},
 		{table: "wake_relays", name: "transport", def: "TEXT NOT NULL DEFAULT 'ssh_etherwake'"},
 		{table: "wake_relays", name: "interface_name", def: "TEXT NOT NULL DEFAULT 'br-lan'"},
 		{table: "wake_relays", name: "ssh_user", def: "TEXT NOT NULL DEFAULT ''"},
@@ -206,7 +218,101 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 			return err
 		}
 	}
+	if err := s.dropLegacyRemoteURL(ctx); err != nil {
+		return err
+	}
+	return s.migrateRemoteProfiles(ctx)
+}
+
+func (s *Store) dropLegacyRemoteURL(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(devices)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		found = found || strings.EqualFold(name, "remote_url")
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	// Erase legacy hosted endpoints before removing the obsolete column so a
+	// failed ALTER can never leave private URLs behind in the local database.
+	if _, err := s.db.ExecContext(ctx, `UPDATE devices SET remote_url = ''`); err != nil {
+		return fmt.Errorf("erase legacy remote URLs: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE devices DROP COLUMN remote_url`); err != nil {
+		return fmt.Errorf("remove legacy remote URL storage: %w", err)
+	}
 	return nil
+}
+
+func (s *Store) migrateRemoteProfiles(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(remote_profiles)`)
+	if err != nil {
+		return err
+	}
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if columns["mode"] && !columns["name"] && !columns["domain"] && !columns["credential_mode"] {
+		return nil
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `
+DROP INDEX IF EXISTS remote_profiles_device_idx;
+ALTER TABLE remote_profiles RENAME TO remote_profiles_legacy_v032;
+CREATE TABLE remote_profiles (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL UNIQUE,
+  protocol TEXT NOT NULL,
+  host TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  verify_port INTEGER NOT NULL,
+  username_hint TEXT NOT NULL DEFAULT '',
+  mode TEXT NOT NULL DEFAULT 'browser-local',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+);
+INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, mode, enabled, created_at, updated_at)
+SELECT id, device_id, protocol, host, port,
+       CASE WHEN verify_port > 0 THEN verify_port ELSE port END,
+       username_hint, 'browser-local', enabled, created_at, updated_at
+FROM remote_profiles_legacy_v032
+WHERE rowid IN (SELECT MAX(rowid) FROM remote_profiles_legacy_v032 GROUP BY device_id);
+DROP TABLE remote_profiles_legacy_v032;
+`); err != nil {
+		return fmt.Errorf("migrate remote profiles: %w", err)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureColumn(ctx context.Context, table, column, definition string) error {
@@ -314,7 +420,7 @@ func (s *Store) DeleteSite(ctx context.Context, id string) error {
 }
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, remote_url, description, enabled, created_at, updated_at FROM devices ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -331,14 +437,14 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 }
 
 func (s *Store) GetDevice(ctx context.Context, id string) (Device, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, remote_url, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, id)
 	return scanDevice(row)
 }
 
 func scanDevice(scanner interface{ Scan(...any) error }) (Device, error) {
 	var item Device
 	var enabled int
-	err := scanner.Scan(&item.ID, &item.Name, &item.MACAddress, &item.IPAddress, &item.BroadcastAddress, &item.Port, &item.Interface, &item.SiteID, &item.DeviceType, &item.Platform, &item.WakeStrategy, &item.WakeRelayID, &item.VerifyPort, &item.RemoteURL, &item.Description, &enabled, &item.CreatedAt, &item.UpdatedAt)
+	err := scanner.Scan(&item.ID, &item.Name, &item.MACAddress, &item.IPAddress, &item.BroadcastAddress, &item.Port, &item.Interface, &item.SiteID, &item.DeviceType, &item.Platform, &item.WakeStrategy, &item.WakeRelayID, &item.VerifyPort, &item.Description, &enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrNotFound
 	}
@@ -363,7 +469,7 @@ func (s *Store) CreateDevice(ctx context.Context, item Device) (Device, error) {
 	if item.WakeStrategy == "" {
 		item.WakeStrategy = "broadcast"
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, remote_url, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, strings.TrimSpace(item.RemoteURL), item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
 	if err != nil {
 		return Device{}, normalizeDBError(err)
 	}
@@ -378,7 +484,7 @@ func (s *Store) UpdateDevice(ctx context.Context, id string, item Device) (Devic
 	if item.WakeStrategy == "" {
 		item.WakeStrategy = "broadcast"
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, remote_url = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, strings.TrimSpace(item.RemoteURL), item.Description, boolInt(item.Enabled), item.UpdatedAt, id)
+	result, err := s.db.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.UpdatedAt, id)
 	if err != nil {
 		return Device{}, normalizeDBError(err)
 	}
@@ -394,6 +500,10 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE device_id = ?`, id); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_profiles WHERE device_id = ?`, id); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -601,14 +711,18 @@ func (s *Store) Export(ctx context.Context) (ExportData, error) {
 	if err != nil {
 		return ExportData{}, err
 	}
-	return ExportData{Version: 2, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays}, nil
+	profiles, err := s.ListRemoteProfiles(ctx)
+	if err != nil {
+		return ExportData{}, err
+	}
+	return ExportData{Version: 3, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays, RemoteProfiles: profiles}, nil
 }
 
 func (s *Store) Import(ctx context.Context, data ExportData) error {
 	if data.Version == 0 {
 		data.Version = 1
 	}
-	if data.Version != 1 && data.Version != 2 {
+	if data.Version != 1 && data.Version != 2 && data.Version != 3 {
 		return fmt.Errorf("unsupported export version %d", data.Version)
 	}
 	relayIDs := make(map[string]string, len(data.WakeRelays))
@@ -624,16 +738,36 @@ func (s *Store) Import(ctx context.Context, data ExportData) error {
 			return err
 		}
 	}
+	deviceIDs := make(map[string]string, len(data.Devices))
 	for _, device := range data.Devices {
+		originalID := device.ID
 		if mapped, ok := relayIDs[device.WakeRelayID]; ok {
 			device.WakeRelayID = mapped
 		}
-		if err := s.upsertDevice(ctx, device); err != nil {
+		imported, err := s.upsertDevice(ctx, device)
+		if err != nil {
+			return err
+		}
+		deviceIDs[originalID] = imported.ID
+	}
+	for _, group := range data.Groups {
+		for index, oldID := range group.DeviceIDs {
+			if mapped, ok := deviceIDs[oldID]; ok {
+				group.DeviceIDs[index] = mapped
+			}
+		}
+		if err := s.upsertGroup(ctx, group); err != nil {
 			return err
 		}
 	}
-	for _, group := range data.Groups {
-		if err := s.upsertGroup(ctx, group); err != nil {
+	for _, profile := range data.RemoteProfiles {
+		mapped, ok := deviceIDs[profile.DeviceID]
+		if !ok {
+			return fmt.Errorf("remote profile references unknown device %q", profile.DeviceID)
+		}
+		profile.ID = ""
+		profile.DeviceID = mapped
+		if _, err := s.UpsertRemoteProfile(ctx, profile); err != nil {
 			return err
 		}
 	}
@@ -654,18 +788,16 @@ func (s *Store) upsertSite(ctx context.Context, item Site) error {
 	return err
 }
 
-func (s *Store) upsertDevice(ctx context.Context, item Device) error {
+func (s *Store) upsertDevice(ctx context.Context, item Device) (Device, error) {
 	var existingID string
 	err := s.db.QueryRowContext(ctx, `SELECT id FROM devices WHERE mac_address = ?`, strings.ToLower(item.MACAddress)).Scan(&existingID)
 	if errors.Is(err, sql.ErrNoRows) {
-		_, err = s.CreateDevice(ctx, item)
-		return err
+		return s.CreateDevice(ctx, item)
 	}
 	if err != nil {
-		return err
+		return Device{}, err
 	}
-	_, err = s.UpdateDevice(ctx, existingID, item)
-	return err
+	return s.UpdateDevice(ctx, existingID, item)
 }
 
 func (s *Store) upsertGroup(ctx context.Context, item Group) error {
