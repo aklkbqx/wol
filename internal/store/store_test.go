@@ -34,7 +34,6 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer migrated.Close()
 	device, err := migrated.CreateDevice(t.Context(), Device{Name: "legacy-target", MACAddress: "aa:bb:cc:dd:ee:11", Platform: "linux", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
@@ -42,11 +41,27 @@ CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT
 	if device.Platform != "linux" || device.WakeStrategy != "broadcast" {
 		t.Fatalf("unexpected migrated device: %+v", device)
 	}
-	if _, err := migrated.GetDevice(t.Context(), device.ID); err != nil {
+	if device.RemoteURL != "" {
+		t.Fatalf("legacy remote URL default = %q, want empty", device.RemoteURL)
+	}
+	device.RemoteURL = "https://wol.example.test/remote/legacy-target"
+	if _, err := migrated.UpdateDevice(t.Context(), device.ID, device); err != nil {
 		t.Fatal(err)
 	}
 	if relays, err := migrated.ListWakeRelays(t.Context()); err != nil || len(relays) != 0 {
 		t.Fatalf("unexpected relay inventory after migration: %d, %v", len(relays), err)
+	}
+	if err := migrated.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	persisted, err := reopened.GetDevice(t.Context(), device.ID)
+	if err != nil || persisted.RemoteURL != device.RemoteURL {
+		t.Fatalf("remote URL after reopen = %q, %v", persisted.RemoteURL, err)
 	}
 }
 
@@ -99,14 +114,15 @@ func TestPortableExportImportsRelayReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.CreateDevice(t.Context(), Device{Name: "windows", MACAddress: "02:00:00:00:00:5d", IPAddress: "192.168.50.200", WakeStrategy: "relay", WakeRelayID: relay.ID, Enabled: true}); err != nil {
+	remoteURL := "https://wol.example.test/remote/windows"
+	if _, err := source.CreateDevice(t.Context(), Device{Name: "windows", MACAddress: "02:00:00:00:00:5d", IPAddress: "192.168.50.200", WakeStrategy: "relay", WakeRelayID: relay.ID, RemoteURL: remoteURL, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := source.Export(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data.Devices) != 1 || len(data.WakeRelays) != 1 {
+	if data.Version != 2 || len(data.Devices) != 1 || len(data.WakeRelays) != 1 {
 		t.Fatalf("unexpected export: %+v", data)
 	}
 
@@ -126,7 +142,7 @@ func TestPortableExportImportsRelayReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(devices) != 1 || len(relays) != 1 || devices[0].WakeRelayID != relays[0].ID {
+	if len(devices) != 1 || len(relays) != 1 || devices[0].WakeRelayID != relays[0].ID || devices[0].RemoteURL != remoteURL {
 		t.Fatalf("relay reference was not remapped: devices=%+v relays=%+v", devices, relays)
 	}
 }

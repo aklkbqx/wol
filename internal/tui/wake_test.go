@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -94,8 +96,55 @@ func TestCompactWakeDeskFitsShortTerminalHeight(t *testing.T) {
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
 		t.Fatalf("compact view uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
 	}
-	if !strings.Contains(view, "WOL WAKE DESK") || !strings.Contains(view, "1 Machines") || !strings.Contains(view, "P:") || !strings.Contains(view, "W:") {
+	if !strings.Contains(view, "WOL WAKE DESK") || !strings.Contains(view, "1 Machines") || !strings.Contains(view, "POWER") || !strings.Contains(view, "WAKE") || !strings.Contains(view, "REMOTE") {
 		t.Fatalf("compact view lost essential context:\n%s", view)
+	}
+}
+
+func TestShortWideTerminalUsesCompactLayout(t *testing.T) {
+	model := &WakeModel{
+		width: 120, height: 24, theme: NewTheme(false, true), motion: NewMotion(false),
+		devices: []store.Device{
+			{ID: "one", Name: "private", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.5", RemoteURL: "https://wol.example.test/remote/private", Enabled: true},
+			{ID: "two", Name: "windows", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.200", RemoteURL: "https://wol.example.test/remote/windows", Enabled: true},
+		},
+		presence: map[string]string{"one": "online", "two": "offline"},
+		status:   "Power scan complete.",
+	}
+	view := model.View()
+	if ResolveLayout(model.width, model.height) != LayoutCompact || strings.Contains(view, "ACTION DECK") {
+		t.Fatalf("short terminal did not choose compact layout:\n%s", view)
+	}
+	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
+		t.Fatalf("short wide view uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
+	}
+	if !strings.Contains(view, "[Enter] remote") {
+		t.Fatalf("compact footer does not name the primary action:\n%s", view)
+	}
+}
+
+func TestMachineViewportFitsLargeInventories(t *testing.T) {
+	devices := make([]store.Device, 20)
+	presenceStates := make(map[string]string, len(devices))
+	for i := range devices {
+		id := fmt.Sprintf("device-%02d", i)
+		devices[i] = store.Device{ID: id, Name: id, MACAddress: fmt.Sprintf("00:11:22:33:44:%02x", i), IPAddress: fmt.Sprintf("192.168.50.%d", i+10), Enabled: true}
+		presenceStates[id] = "offline"
+	}
+	for _, size := range []struct{ width, height int }{{40, 20}, {80, 20}, {120, 30}} {
+		model := &WakeModel{width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false), devices: devices, presence: presenceStates, selected: len(devices) - 1, status: "Power scan complete."}
+		view := model.View()
+		if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
+			t.Fatalf("%dx%d large inventory uses %d lines:\n%s", size.width, size.height, lines, view)
+		}
+		for lineNo, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(stripANSI(line)); got > size.width {
+				t.Fatalf("%dx%d line %d overflows at %d: %q", size.width, size.height, lineNo, got, line)
+			}
+		}
+		if !strings.Contains(view, "device-19") || !strings.Contains(view, "machine(s) above") {
+			t.Fatalf("%dx%d viewport lost selection/context:\n%s", size.width, size.height, view)
+		}
 	}
 }
 
@@ -126,7 +175,7 @@ func TestWakeDeskShowsPowerAndWakeStatesSeparately(t *testing.T) {
 		height: 40,
 		theme:  NewTheme(false, true),
 		devices: []store.Device{
-			{ID: "online", Name: "windows", MACAddress: "02:00:00:00:00:5d", IPAddress: "192.168.50.200", BroadcastAddress: "192.168.50.255", Port: 9, Enabled: true},
+			{ID: "online", Name: "windows", MACAddress: "02:00:00:00:00:5d", IPAddress: "192.168.50.200", BroadcastAddress: "192.168.50.255", Port: 9, RemoteURL: "https://wol.example.test/remote/windows", Enabled: true},
 			{ID: "unknown", Name: "private", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.5", Enabled: true},
 			{ID: "blocked", Name: "broken", MACAddress: "not-a-mac", IPAddress: "192.168.50.6", Enabled: true},
 		},
@@ -134,7 +183,7 @@ func TestWakeDeskShowsPowerAndWakeStatesSeparately(t *testing.T) {
 		status:   "ready",
 	}
 	view := model.View()
-	for _, want := range []string{"POWER", "WAKE", "ONLINE", "UNKNOWN", "OFFLINE", "READY", "BLOCKED", "192.168.50.200"} {
+	for _, want := range []string{"POWER", "WAKE", "REMOTE", "CONFIGURED", "SETUP", "ONLINE", "UNKNOWN", "OFFLINE", "READY", "BLOCKED", "192.168.50.200"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -195,5 +244,116 @@ func TestWakeDeskRefreshStartsPresenceScan(t *testing.T) {
 	message, ok := cmd().(probeBatchMsg)
 	if !ok || message.summary.Online != 1 || message.statuses["one"] != "online" {
 		t.Fatalf("scan message = %#v, want one online result", message)
+	}
+}
+
+func TestPrimaryActionUsesRemoteWhenConfigured(t *testing.T) {
+	model := &WakeModel{
+		width: 120, height: 32, theme: NewTheme(false, true), motion: NewMotion(false),
+		devices:    []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", RemoteURL: "https://wol.example.test/remote/windows", Enabled: true}},
+		presence:   map[string]string{"one": "online"},
+		openRemote: func(context.Context, string) error { return nil },
+	}
+	cmd := model.beginPrimaryAction()
+	if cmd == nil || !model.opening || model.waking || model.action != "remote" {
+		t.Fatalf("primary action did not select remote: opening=%v waking=%v action=%q", model.opening, model.waking, model.action)
+	}
+	view := model.View()
+	for _, want := range []string{"ACTION DECK", "PRIMARY", "Open remote", "DESK", "HANDOFF", "REMOTE"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("remote action view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestPrimaryActionFallsBackToWakeWithoutRemote(t *testing.T) {
+	model := &WakeModel{
+		width: 80, height: 32, theme: NewTheme(false, true), motion: NewMotion(false),
+		devices:  []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", BroadcastAddress: "192.168.50.255", Enabled: true}},
+		presence: map[string]string{"one": "offline"},
+	}
+	if cmd := model.beginPrimaryAction(); cmd == nil || !model.waking || model.opening || model.action != "wake" {
+		t.Fatalf("primary action did not fall back to wake: waking=%v opening=%v action=%q", model.waking, model.opening, model.action)
+	}
+}
+
+func TestWakeAndRemoteActionsCannotOverlap(t *testing.T) {
+	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", BroadcastAddress: "192.168.50.255", RemoteURL: "https://wol.example.test/remote/windows", Enabled: true}
+	model := &WakeModel{devices: []store.Device{device}, presence: map[string]string{}, motion: NewMotion(false), waking: true}
+	if cmd := model.beginRemote(); cmd != nil || model.opening {
+		t.Fatalf("remote started during wake: cmd=%v opening=%v", cmd != nil, model.opening)
+	}
+	model.waking, model.opening = false, true
+	if cmd := model.beginWake(false); cmd != nil || model.waking {
+		t.Fatalf("wake started during remote: cmd=%v waking=%v", cmd != nil, model.waking)
+	}
+}
+
+func TestColoredWideRowsKeepStatusColumnsAligned(t *testing.T) {
+	model := &WakeModel{
+		theme: NewTheme(true, false), selected: 0,
+		devices: []store.Device{
+			{ID: "one", Name: "a", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.5", Enabled: true},
+			{ID: "two", Name: "a-much-longer-name", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.6", Enabled: true},
+		},
+		presence: map[string]string{"one": "online", "two": "offline"},
+	}
+	view := stripANSI(model.renderMachineList(model.devices, 120))
+	columns := make([]int, 0, 2)
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "192.168.50.") {
+			index := strings.Index(line, "POWER")
+			columns = append(columns, lipgloss.Width(line[:index]))
+		}
+	}
+	if len(columns) != 2 || columns[0] != columns[1] {
+		t.Fatalf("colored rows are not aligned: columns=%v\n%s", columns, view)
+	}
+}
+
+func TestMachineEditPreservesMetadataAndSavesRemote(t *testing.T) {
+	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	device, err := repository.CreateDevice(t.Context(), store.Device{
+		Name: "windows", MACAddress: "00:11:22:33:44:55", SiteID: "site-private",
+		DeviceType: "desktop", Platform: "windows", Description: "keep me", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := NewWakeModel(repository, "test", "test")
+	model.devices = []store.Device{device}
+	model.beginEdit()
+	model.form.values[9] = "https://wol.example.test/remote/windows"
+	message, ok := model.saveForm()().(formSavedMsg)
+	if !ok || message.keep {
+		t.Fatalf("save message = %#v", message)
+	}
+	updated, err := repository.GetDevice(t.Context(), device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.RemoteURL == "" || updated.SiteID != device.SiteID || updated.DeviceType != "desktop" || updated.Platform != "windows" || updated.Description != "keep me" || !updated.Enabled {
+		t.Fatalf("machine edit lost metadata: %+v", updated)
+	}
+}
+
+func TestMachineFormFitsShortTerminal(t *testing.T) {
+	model := &WakeModel{width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false), presence: map[string]string{}}
+	model.beginAdd()
+	view := model.View()
+	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
+		t.Fatalf("machine form uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
+	}
+	if !strings.Contains(view, "more field") {
+		t.Fatalf("short form does not explain hidden fields:\n%s", view)
+	}
+	model.form.selected = len(model.form.labels) - 1
+	view = model.View()
+	if !strings.Contains(view, "Remote URL") || !strings.Contains(view, "earlier field") {
+		t.Fatalf("short form did not scroll to selected remote field:\n%s", view)
 	}
 }

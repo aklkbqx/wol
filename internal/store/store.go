@@ -42,6 +42,7 @@ type Device struct {
 	WakeStrategy     string `json:"wakeStrategy"`
 	WakeRelayID      string `json:"wakeRelayId,omitempty"`
 	VerifyPort       int    `json:"verifyPort"`
+	RemoteURL        string `json:"remoteUrl,omitempty"`
 	Description      string `json:"description"`
 	Enabled          bool   `json:"enabled"`
 	CreatedAt        string `json:"createdAt"`
@@ -131,6 +132,7 @@ CREATE TABLE IF NOT EXISTS devices (
 	wake_strategy TEXT NOT NULL DEFAULT 'broadcast',
 	wake_relay_id TEXT NOT NULL DEFAULT '',
   verify_port INTEGER NOT NULL DEFAULT 0,
+  remote_url TEXT NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -195,6 +197,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		{table: "devices", name: "platform", def: "TEXT NOT NULL DEFAULT 'unknown'"},
 		{table: "devices", name: "wake_strategy", def: "TEXT NOT NULL DEFAULT 'broadcast'"},
 		{table: "devices", name: "wake_relay_id", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "devices", name: "remote_url", def: "TEXT NOT NULL DEFAULT ''"},
 		{table: "wake_relays", name: "transport", def: "TEXT NOT NULL DEFAULT 'ssh_etherwake'"},
 		{table: "wake_relays", name: "interface_name", def: "TEXT NOT NULL DEFAULT 'br-lan'"},
 		{table: "wake_relays", name: "ssh_user", def: "TEXT NOT NULL DEFAULT ''"},
@@ -311,7 +314,7 @@ func (s *Store) DeleteSite(ctx context.Context, id string) error {
 }
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, remote_url, description, enabled, created_at, updated_at FROM devices ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -328,14 +331,14 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 }
 
 func (s *Store) GetDevice(ctx context.Context, id string) (Device, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, remote_url, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, id)
 	return scanDevice(row)
 }
 
 func scanDevice(scanner interface{ Scan(...any) error }) (Device, error) {
 	var item Device
 	var enabled int
-	err := scanner.Scan(&item.ID, &item.Name, &item.MACAddress, &item.IPAddress, &item.BroadcastAddress, &item.Port, &item.Interface, &item.SiteID, &item.DeviceType, &item.Platform, &item.WakeStrategy, &item.WakeRelayID, &item.VerifyPort, &item.Description, &enabled, &item.CreatedAt, &item.UpdatedAt)
+	err := scanner.Scan(&item.ID, &item.Name, &item.MACAddress, &item.IPAddress, &item.BroadcastAddress, &item.Port, &item.Interface, &item.SiteID, &item.DeviceType, &item.Platform, &item.WakeStrategy, &item.WakeRelayID, &item.VerifyPort, &item.RemoteURL, &item.Description, &enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrNotFound
 	}
@@ -360,7 +363,7 @@ func (s *Store) CreateDevice(ctx context.Context, item Device) (Device, error) {
 	if item.WakeStrategy == "" {
 		item.WakeStrategy = "broadcast"
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, remote_url, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, strings.TrimSpace(item.RemoteURL), item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
 	if err != nil {
 		return Device{}, normalizeDBError(err)
 	}
@@ -375,7 +378,7 @@ func (s *Store) UpdateDevice(ctx context.Context, id string, item Device) (Devic
 	if item.WakeStrategy == "" {
 		item.WakeStrategy = "broadcast"
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.UpdatedAt, id)
+	result, err := s.db.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, remote_url = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, strings.TrimSpace(item.RemoteURL), item.Description, boolInt(item.Enabled), item.UpdatedAt, id)
 	if err != nil {
 		return Device{}, normalizeDBError(err)
 	}
@@ -598,14 +601,14 @@ func (s *Store) Export(ctx context.Context) (ExportData, error) {
 	if err != nil {
 		return ExportData{}, err
 	}
-	return ExportData{Version: 1, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays}, nil
+	return ExportData{Version: 2, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays}, nil
 }
 
 func (s *Store) Import(ctx context.Context, data ExportData) error {
 	if data.Version == 0 {
 		data.Version = 1
 	}
-	if data.Version != 1 {
+	if data.Version != 1 && data.Version != 2 {
 		return fmt.Errorf("unsupported export version %d", data.Version)
 	}
 	relayIDs := make(map[string]string, len(data.WakeRelays))

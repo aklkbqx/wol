@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -41,6 +42,8 @@ func findStoredDevice(dataStore *store.Store, target string) (store.Device, erro
 	}
 	if device, err := dataStore.GetDevice(context.Background(), target); err == nil {
 		return device, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return store.Device{}, err
 	}
 	devices, err := dataStore.ListDevices(context.Background())
 	if err != nil {
