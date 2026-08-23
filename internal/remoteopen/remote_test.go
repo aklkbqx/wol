@@ -9,14 +9,14 @@ import (
 func TestValidate(t *testing.T) {
 	t.Parallel()
 	for _, target := range []string{
-		"https://wol.example.test/remote/device-1",
-		"http://192.168.50.5/remote/device-1",
+		"http://127.0.0.1:49152/s/device-1",
+		"http://localhost:49152/s/device-1",
 	} {
 		if got, err := Validate(target); err != nil || got != target {
 			t.Fatalf("Validate(%q) = %q, %v", target, got, err)
 		}
 	}
-	for _, target := range []string{"", "example.test", "file:///tmp/a", "rdp://192.168.50.200", "vnc://192.168.50.5", "https://user:secret@example.test", "https://example.test/?code=value", "https://example.test/#session", "https://example.test/\nnext"} {
+	for _, target := range []string{"", "example.test", "file:///tmp/a", "https://127.0.0.1/session", "http://192.168.50.5/session", "http://user:secret@127.0.0.1/session", "http://127.0.0.1/?code=value", "http://127.0.0.1/#session", "http://127.0.0.1/\nnext"} {
 		if _, err := Validate(target); err == nil {
 			t.Fatalf("Validate(%q) unexpectedly succeeded", target)
 		}
@@ -25,7 +25,7 @@ func TestValidate(t *testing.T) {
 
 func TestCommandDoesNotUseShell(t *testing.T) {
 	t.Parallel()
-	cmd, err := Command(context.Background(), "https://example.test/remote/a%20b")
+	cmd, err := Command(context.Background(), "http://127.0.0.1:49152/s/a%20b")
 	if err != nil {
 		t.Fatal(err)
 	}

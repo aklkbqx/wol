@@ -10,6 +10,7 @@ import (
 
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
+	wakeservice "github.com/aklkbqx/wol/internal/wake"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -105,9 +106,10 @@ func TestShortWideTerminalUsesCompactLayout(t *testing.T) {
 	model := &WakeModel{
 		width: 120, height: 24, theme: NewTheme(false, true), motion: NewMotion(false),
 		devices: []store.Device{
-			{ID: "one", Name: "private", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.5", RemoteURL: "https://wol.example.test/remote/private", Enabled: true},
-			{ID: "two", Name: "windows", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.200", RemoteURL: "https://wol.example.test/remote/windows", Enabled: true},
+			{ID: "one", Name: "private", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.5", Enabled: true},
+			{ID: "two", Name: "windows", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.200", Enabled: true},
 		},
+		profiles: map[string]store.RemoteProfile{"one": {DeviceID: "one", Protocol: "ssh", Host: "192.168.50.5", Port: 22, VerifyPort: 22, Mode: "browser-local", Enabled: true}},
 		presence: map[string]string{"one": "online", "two": "offline"},
 		status:   "Power scan complete.",
 	}
@@ -118,8 +120,8 @@ func TestShortWideTerminalUsesCompactLayout(t *testing.T) {
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
 		t.Fatalf("short wide view uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
 	}
-	if !strings.Contains(view, "[Enter] remote") {
-		t.Fatalf("compact footer does not name the primary action:\n%s", view)
+	if !strings.Contains(view, "[Enter] choose") {
+		t.Fatalf("compact footer does not keep Enter explicit:\n%s", view)
 	}
 }
 
@@ -175,15 +177,16 @@ func TestWakeDeskShowsPowerAndWakeStatesSeparately(t *testing.T) {
 		height: 40,
 		theme:  NewTheme(false, true),
 		devices: []store.Device{
-			{ID: "online", Name: "windows", MACAddress: "02:00:00:00:00:5d", IPAddress: "192.168.50.200", BroadcastAddress: "192.168.50.255", Port: 9, RemoteURL: "https://wol.example.test/remote/windows", Enabled: true},
+			{ID: "online", Name: "windows", MACAddress: "02:00:00:00:00:5d", IPAddress: "192.168.50.200", BroadcastAddress: "192.168.50.255", Port: 9, Enabled: true},
 			{ID: "unknown", Name: "private", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.5", Enabled: true},
 			{ID: "blocked", Name: "broken", MACAddress: "not-a-mac", IPAddress: "192.168.50.6", Enabled: true},
 		},
 		presence: map[string]string{"online": "online", "unknown": "unknown", "blocked": "offline"},
+		profiles: map[string]store.RemoteProfile{"online": {DeviceID: "online", Protocol: "rdp", Host: "192.168.50.200", Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}},
 		status:   "ready",
 	}
 	view := model.View()
-	for _, want := range []string{"POWER", "WAKE", "REMOTE", "CONFIGURED", "SETUP", "ONLINE", "UNKNOWN", "OFFLINE", "READY", "BLOCKED", "192.168.50.200"} {
+	for _, want := range []string{"POWER", "WAKE", "REMOTE", "SETUP", "ONLINE", "UNKNOWN", "OFFLINE", "READY", "BLOCKED", "192.168.50.200"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -247,40 +250,115 @@ func TestWakeDeskRefreshStartsPresenceScan(t *testing.T) {
 	}
 }
 
-func TestPrimaryActionUsesRemoteWhenConfigured(t *testing.T) {
+func TestEnterOnlyOpensActionPicker(t *testing.T) {
 	model := &WakeModel{
 		width: 120, height: 32, theme: NewTheme(false, true), motion: NewMotion(false),
-		devices:    []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", RemoteURL: "https://wol.example.test/remote/windows", Enabled: true}},
-		presence:   map[string]string{"one": "online"},
-		openRemote: func(context.Context, string) error { return nil },
+		devices:  []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", Enabled: true}},
+		presence: map[string]string{"one": "online"},
 	}
-	cmd := model.beginPrimaryAction()
-	if cmd == nil || !model.opening || model.waking || model.action != "remote" {
-		t.Fatalf("primary action did not select remote: opening=%v waking=%v action=%q", model.opening, model.waking, model.action)
+	cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || !model.actionPicker || model.opening || model.waking || model.checking {
+		t.Fatalf("Enter executed work: picker=%v opening=%v waking=%v checking=%v", model.actionPicker, model.opening, model.waking, model.checking)
 	}
 	view := model.View()
-	for _, want := range []string{"ACTION DECK", "PRIMARY", "Open remote", "DESK", "HANDOFF", "REMOTE"} {
+	for _, want := range []string{"CHOOSE ACTION", "Wake only", "Wake & Remote", "Check power", "Cancel", "Nothing runs until you confirm"} {
 		if !strings.Contains(view, want) {
-			t.Fatalf("remote action view missing %q:\n%s", want, view)
+			t.Fatalf("picker missing %q:\n%s", want, view)
 		}
 	}
 }
 
-func TestPrimaryActionFallsBackToWakeWithoutRemote(t *testing.T) {
+func TestActionPickerOptionsAreDeterministic(t *testing.T) {
+	profile := store.RemoteProfile{DeviceID: "one", Protocol: "rdp", Host: "192.168.50.200", Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}
+	remoteCalls := 0
 	model := &WakeModel{
 		width: 80, height: 32, theme: NewTheme(false, true), motion: NewMotion(false),
-		devices:  []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", BroadcastAddress: "192.168.50.255", Enabled: true}},
-		presence: map[string]string{"one": "offline"},
+		devices:       []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", BroadcastAddress: "192.168.50.255", Port: 9, Enabled: true}},
+		profiles:      map[string]store.RemoteProfile{"one": profile},
+		presence:      map[string]string{"one": "offline"},
+		wakeAndRemote: func(context.Context, store.Device, store.RemoteProfile) error { remoteCalls++; return nil },
 	}
-	if cmd := model.beginPrimaryAction(); cmd == nil || !model.waking || model.opening || model.action != "wake" {
-		t.Fatalf("primary action did not fall back to wake: waking=%v opening=%v action=%q", model.waking, model.opening, model.action)
+
+	model.openActionPicker()
+	if cmd := model.handleActionPicker("c"); cmd == nil || !model.opening || model.waking || model.action != "wake-remote" {
+		t.Fatalf("c did not select wake+remote: opening=%v waking=%v action=%q", model.opening, model.waking, model.action)
+	} else {
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, batched := range batch {
+				if batched != nil {
+					if result, ok := batched().(remoteResultMsg); ok {
+						model.Update(result)
+					}
+				}
+			}
+		}
+	}
+	if remoteCalls != 1 {
+		t.Fatalf("wake+remote callback calls = %d, want 1", remoteCalls)
+	}
+
+	model.openActionPicker()
+	model.pickerSelected = 3
+	if cmd := model.handleActionPicker("enter"); cmd != nil || model.actionPicker {
+		t.Fatalf("Cancel option started work")
+	}
+}
+
+func TestFixedShortcutsNeverChangeMeaning(t *testing.T) {
+	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", BroadcastAddress: "192.168.50.255", Port: 9, Enabled: true}
+	profile := store.RemoteProfile{DeviceID: "one", Protocol: "rdp", Host: device.IPAddress, Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}
+	newModel := func() *WakeModel {
+		return &WakeModel{devices: []store.Device{device}, profiles: map[string]store.RemoteProfile{"one": profile}, presence: map[string]string{}, motion: NewMotion(false), service: &wakeservice.Service{}, wakeAndRemote: func(context.Context, store.Device, store.RemoteProfile) error { return nil }}
+	}
+	if model := newModel(); model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}}) == nil || !model.waking || model.opening {
+		t.Fatalf("w did not mean wake only")
+	}
+	if model := newModel(); model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}) == nil || !model.opening || model.waking {
+		t.Fatalf("c did not mean wake and remote")
+	}
+	if model := newModel(); model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) == nil || !model.checking || model.waking || model.opening {
+		t.Fatalf("s did not mean check power")
+	}
+}
+
+func TestEscapeCancelsWakeAndRemoteContext(t *testing.T) {
+	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true}
+	profile := store.RemoteProfile{DeviceID: "one", Protocol: "rdp", Host: device.IPAddress, Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}
+	started := make(chan struct{})
+	model := &WakeModel{devices: []store.Device{device}, profiles: map[string]store.RemoteProfile{"one": profile}, presence: map[string]string{}, motion: NewMotion(false), wakeAndRemote: func(ctx context.Context, _ store.Device, _ store.RemoteProfile) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}}
+	cmd := model.beginWakeAndRemote()
+	done := make(chan tea.Msg, 1)
+	go func() {
+		msg := cmd()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			done <- batch[0]()
+			return
+		}
+		done <- msg
+	}()
+	<-started
+	model.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	select {
+	case msg := <-done:
+		model.Update(msg)
+	case <-time.After(time.Second):
+		t.Fatal("Esc did not cancel callback context")
+	}
+	if model.opening || !strings.Contains(strings.ToLower(model.status), "cancel") {
+		t.Fatalf("cancel state = opening %v status %q", model.opening, model.status)
 	}
 }
 
 func TestWakeAndRemoteActionsCannotOverlap(t *testing.T) {
-	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", BroadcastAddress: "192.168.50.255", RemoteURL: "https://wol.example.test/remote/windows", Enabled: true}
-	model := &WakeModel{devices: []store.Device{device}, presence: map[string]string{}, motion: NewMotion(false), waking: true}
-	if cmd := model.beginRemote(); cmd != nil || model.opening {
+	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", BroadcastAddress: "192.168.50.255", Enabled: true}
+	profile := store.RemoteProfile{DeviceID: "one", Protocol: "rdp", Host: "192.168.50.200", Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}
+	model := &WakeModel{devices: []store.Device{device}, profiles: map[string]store.RemoteProfile{"one": profile}, presence: map[string]string{}, motion: NewMotion(false), waking: true, wakeAndRemote: func(context.Context, store.Device, store.RemoteProfile) error { return nil }}
+	if cmd := model.beginWakeAndRemote(); cmd != nil || model.opening {
 		t.Fatalf("remote started during wake: cmd=%v opening=%v", cmd != nil, model.opening)
 	}
 	model.waking, model.opening = false, true
@@ -311,7 +389,7 @@ func TestColoredWideRowsKeepStatusColumnsAligned(t *testing.T) {
 	}
 }
 
-func TestMachineEditPreservesMetadataAndSavesRemote(t *testing.T) {
+func TestMachineEditPreservesMetadataWithoutHostedRemoteField(t *testing.T) {
 	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +405,6 @@ func TestMachineEditPreservesMetadataAndSavesRemote(t *testing.T) {
 	model := NewWakeModel(repository, "test", "test")
 	model.devices = []store.Device{device}
 	model.beginEdit()
-	model.form.values[9] = "https://wol.example.test/remote/windows"
 	message, ok := model.saveForm()().(formSavedMsg)
 	if !ok || message.keep {
 		t.Fatalf("save message = %#v", message)
@@ -336,8 +413,13 @@ func TestMachineEditPreservesMetadataAndSavesRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.RemoteURL == "" || updated.SiteID != device.SiteID || updated.DeviceType != "desktop" || updated.Platform != "windows" || updated.Description != "keep me" || !updated.Enabled {
+	if updated.SiteID != device.SiteID || updated.DeviceType != "desktop" || updated.Platform != "windows" || updated.Description != "keep me" || !updated.Enabled {
 		t.Fatalf("machine edit lost metadata: %+v", updated)
+	}
+	for _, label := range model.form.labels {
+		if strings.Contains(strings.ToLower(label), "url") {
+			t.Fatalf("machine form still exposes remote URL: %v", model.form.labels)
+		}
 	}
 }
 
@@ -353,7 +435,72 @@ func TestMachineFormFitsShortTerminal(t *testing.T) {
 	}
 	model.form.selected = len(model.form.labels) - 1
 	view = model.View()
-	if !strings.Contains(view, "Remote URL") || !strings.Contains(view, "earlier field") {
-		t.Fatalf("short form did not scroll to selected remote field:\n%s", view)
+	if !strings.Contains(view, "Relay ID") || !strings.Contains(view, "earlier field") {
+		t.Fatalf("short form did not scroll to selected final field:\n%s", view)
+	}
+}
+
+func TestWakeAndRemoteRequiresLocalProfileAndRuntime(t *testing.T) {
+	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true}
+	model := &WakeModel{devices: []store.Device{device}, profiles: map[string]store.RemoteProfile{}, presence: map[string]string{}, motion: NewMotion(false)}
+	if cmd := model.beginWakeAndRemote(); cmd != nil || !strings.Contains(model.status, "Press p") {
+		t.Fatalf("missing profile guidance = %q", model.status)
+	}
+	model.profiles[device.ID] = store.RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}
+	if cmd := model.beginWakeAndRemote(); cmd != nil || !strings.Contains(model.status, "remote doctor") {
+		t.Fatalf("missing runtime guidance = %q", model.status)
+	}
+	if strings.Contains(strings.ToLower(model.View()), "http://") || strings.Contains(strings.ToLower(model.View()), "https://") || strings.Contains(strings.ToLower(model.View()), "aklkbqx.com") {
+		t.Fatalf("TUI exposed an external URL/domain:\n%s", model.View())
+	}
+}
+
+func TestRemoteProfileFormSavesProtocolWithoutPassword(t *testing.T) {
+	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	device, err := repository.CreateDevice(t.Context(), store.Device{Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Platform: "windows", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := NewWakeModel(repository, "test", "test")
+	model.devices = []store.Device{device}
+	model.beginRemoteProfile()
+	if model.form == nil || model.form.kind != remoteProfileForm {
+		t.Fatal("p did not open local remote profile form")
+	}
+	for _, label := range model.form.labels {
+		if strings.Contains(strings.ToLower(label), "password") || strings.Contains(strings.ToLower(label), "url") {
+			t.Fatalf("unsafe field in profile form: %q", label)
+		}
+	}
+	message, ok := model.saveForm()().(formSavedMsg)
+	if !ok || message.keep {
+		t.Fatalf("save message = %#v", message)
+	}
+	profile, err := repository.GetRemoteProfile(t.Context(), device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Protocol != "rdp" || profile.Host != device.IPAddress || profile.Mode != "browser-local" || profile.Port != 3389 {
+		t.Fatalf("saved profile = %+v", profile)
+	}
+}
+
+func TestActionPickerFitsResponsiveViewports(t *testing.T) {
+	device := store.Device{ID: "one", Name: "a-very-long-workstation-name", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true}
+	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}} {
+		model := &WakeModel{width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false), devices: []store.Device{device}, presence: map[string]string{}, actionPicker: true}
+		view := model.View()
+		if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
+			t.Fatalf("%dx%d picker uses %d lines:\n%s", size.width, size.height, lines, view)
+		}
+		for lineNo, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(stripANSI(line)); got > size.width {
+				t.Fatalf("%dx%d picker line %d overflows at %d: %q", size.width, size.height, lineNo, got, line)
+			}
+		}
 	}
 }
