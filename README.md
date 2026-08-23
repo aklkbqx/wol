@@ -4,7 +4,7 @@ WOL is a fast, standalone Wake-on-LAN CLI and terminal interface. It opens your
 local machine inventory directly from SQLite and never starts a web server.
 
 ```text
-WOL WAKE DESK  v0.3.0  ·  Credit: aklkbqx
+WOL WAKE DESK  v0.3.1  ·  Credit: aklkbqx
 LOCAL INVENTORY  ·  compact
 
 1 Machines   2 Routes   3 Activity
@@ -12,10 +12,11 @@ LOCAL INVENTORY  ·  compact
 FLEET
   POWER  1 online · 1 offline · 1 unknown
   WAKE   3 ready · 0 blocked
+  REMOTE 1 configured · 2 setup required
 
-› windows       POWER ● ONLINE   WAKE ● READY
-  private       POWER ? UNKNOWN  WAKE ● READY
-  private2      POWER ○ OFFLINE  WAKE ● READY
+› windows       POWER ● ONLINE   WAKE ● READY   REMOTE ● CONFIGURED
+  private       POWER ? UNKNOWN  WAKE ● READY   REMOTE ? SETUP
+  private2      POWER ○ OFFLINE  WAKE ● READY   REMOTE ? SETUP
 ```
 
 Power and wake readiness are intentionally separate: `OFFLINE + READY` is the
@@ -47,12 +48,19 @@ local inventory automatically. Press `a` to add a machine or route.
 ```bash
 wol                         # interactive Wake Desk
 wol wake --device windows   # wake a stored machine
+wol remote windows          # open its configured remote session
+wol remote set windows https://wol.example.test/remote/windows
 wol status windows          # check its current power state
 wol wake AA:BB:CC:DD:EE:FF  # send directly to a MAC address
 wol export --output inventory.json
 wol import inventory.json
 wol version
 ```
+
+Remote URLs may use `http` or `https`. WOL hands them directly to the default
+browser; it does not proxy the session or start a local web server. Put stable
+identifiers in the URL path and do not use credentials, query strings, or
+fragments. The opened web remote can own its wake/check/session flow.
 
 `wol wake --device NAME --verify` waits for the configured TCP service after
 sending. A successful packet send means the packet was delivered; it does not
@@ -61,7 +69,10 @@ claim the machine has finished booting.
 ## Wake Desk controls
 
 - `j/k` or arrows: move
-- `Enter`: wake selected machine
+- `Enter`: run the selected machine's primary action (remote when configured,
+  otherwise wake)
+- `o`: open remote
+- `w`: wake
 - `s`: check selected machine
 - `f`: force wake a disabled machine
 - `a/e/d`: add, edit, delete
@@ -71,7 +82,7 @@ claim the machine has finished booting.
 - `q`: quit
 
 The interface adapts to narrow, compact, and wide terminals. Motion appears
-only while a wake signal is being sent. Use `WOL_TUI_REDUCED_MOTION=1` or
+only while a wake or remote handoff is active. Use `WOL_TUI_REDUCED_MOTION=1` or
 `WOL_TUI_MOTION=off` to disable it, `WOL_TUI_ASCII=1` for ASCII glyphs, and
 `NO_COLOR=1` to disable color.
 
@@ -81,7 +92,8 @@ Inventory is stored locally in SQLite. Wake Desk never displays its filesystem
 path. Set `WOL_DATA_DIR` to choose a data directory or `WOL_DB` to select an
 explicit database for automation.
 
-Portable exports contain sites, machines, groups, and wake relay routes. They
+Portable exports contain sites, machines (including configured remote URLs),
+groups, and wake relay routes. They
 exclude wake history and any unrelated tables that may exist in an older
 database. Export files are created with owner-only permissions.
 

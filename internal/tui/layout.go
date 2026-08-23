@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 // LayoutMode is selected from the current terminal dimensions.
 type LayoutMode string
@@ -12,13 +16,18 @@ const (
 )
 
 func ResolveLayout(width, height int) LayoutMode {
-	if width >= 110 && height >= 24 {
+	if width >= 110 && height >= 30 {
 		return LayoutWide
 	}
 	if width >= 76 && height >= 20 {
 		return LayoutCompact
 	}
 	return LayoutNarrow
+}
+
+func padVisible(text string, width int) string {
+	text = fitText(text, width)
+	return text + strings.Repeat(" ", max(0, width-lipgloss.Width(text)))
 }
 
 func contentWidth(width int) int {

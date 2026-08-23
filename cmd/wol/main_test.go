@@ -24,7 +24,7 @@ func TestUsage(t *testing.T) {
 	buf.ReadFrom(r)
 
 	out := buf.String()
-	if !strings.Contains(out, "wol tui") || !strings.Contains(out, "wol wake") || !strings.Contains(out, "wol status") || !strings.Contains(out, "wol import") || !strings.Contains(out, "wol version") || strings.Contains(out, "wol server") || strings.Contains(out, "wol deploy") {
+	if !strings.Contains(out, "wol tui") || !strings.Contains(out, "wol wake") || !strings.Contains(out, "wol remote") || !strings.Contains(out, "wol status") || !strings.Contains(out, "wol import") || !strings.Contains(out, "wol version") || strings.Contains(out, "wol server") || strings.Contains(out, "wol deploy") {
 		t.Fatalf("unexpected usage output: %s", out)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/aklkbqx/wol/internal/buildinfo"
 	"github.com/aklkbqx/wol/internal/presence"
+	"github.com/aklkbqx/wol/internal/remoteopen"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
 	"github.com/aklkbqx/wol/internal/wol"
@@ -30,6 +32,11 @@ type wakeDataMsg struct {
 type wakeResultMsg struct {
 	result wakeservice.Result
 	err    error
+}
+
+type remoteResultMsg struct {
+	deviceName string
+	err        error
 }
 
 type probeResultMsg struct {
@@ -72,6 +79,7 @@ type wakeForm struct {
 type WakeModel struct {
 	repository *store.Store
 	service    *wakeservice.Service
+	openRemote func(context.Context, string) error
 	version    string
 	credit     string
 	theme      Theme
@@ -90,6 +98,8 @@ type WakeModel struct {
 
 	loading     bool
 	waking      bool
+	opening     bool
+	action      string
 	checking    bool
 	status      string
 	filtering   bool
@@ -113,6 +123,7 @@ func NewWakeModel(repository *store.Store, version, credit string) *WakeModel {
 	return &WakeModel{
 		repository: repository,
 		service:    wakeservice.NewService(repository, wakeservice.Hooks{}),
+		openRemote: remoteopen.Open,
 		version:    version,
 		credit:     credit,
 		theme:      DetectTheme(),
@@ -198,6 +209,14 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Wake sent to %s via %s (%d packet(s)).", value.result.Device.Name, routeLabel(value.result.Route), value.result.Attempt.Packets)
 		}
 		return m, m.loadData()
+	case remoteResultMsg:
+		m.opening = false
+		if value.err != nil {
+			m.status = "Remote did not open: " + value.err.Error()
+		} else {
+			m.status = "Remote opened for " + value.deviceName + "."
+		}
+		return m, nil
 	case probeResultMsg:
 		m.checking = false
 		if value.err != nil {
@@ -302,7 +321,15 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.move(-1)
 	case "enter":
 		if m.tab == 0 {
+			return m.beginPrimaryAction()
+		}
+	case "w":
+		if m.tab == 0 {
 			return m.beginWake(false)
+		}
+	case "o":
+		if m.tab == 0 {
+			return m.beginRemote()
 		}
 	case "f":
 		if m.tab == 0 {
@@ -354,12 +381,17 @@ func (m *WakeModel) move(delta int) {
 
 func (m *WakeModel) beginWake(force bool) tea.Cmd {
 	devices := m.filteredDevices()
-	if len(devices) == 0 || m.waking {
+	if len(devices) == 0 {
 		m.status = "No machine selected. Press a to add one."
+		return nil
+	}
+	if m.waking || m.opening {
+		m.status = "Finish the current action before starting another."
 		return nil
 	}
 	device := devices[m.selected]
 	m.waking = true
+	m.action = "wake"
 	m.status = fmt.Sprintf("Sending wake packet to %s...", device.Name)
 	m.motion.Trigger(time.Now(), 1200*time.Millisecond)
 	wakeCmd := func() tea.Msg {
@@ -369,6 +401,50 @@ func (m *WakeModel) beginWake(force bool) tea.Cmd {
 		return wakeResultMsg{result: result, err: err}
 	}
 	return tea.Batch(wakeCmd, m.motionTick())
+}
+
+func (m *WakeModel) beginPrimaryAction() tea.Cmd {
+	devices := m.filteredDevices()
+	if len(devices) == 0 {
+		m.status = "No machine selected. Press a to add one."
+		return nil
+	}
+	if state, _ := remoteCapability(devices[min(m.selected, len(devices)-1)]); state == "CONFIGURED" {
+		return m.beginRemote()
+	}
+	return m.beginWake(false)
+}
+
+func (m *WakeModel) beginRemote() tea.Cmd {
+	devices := m.filteredDevices()
+	if len(devices) == 0 {
+		m.status = "No machine selected. Press a to add one."
+		return nil
+	}
+	if m.opening || m.waking {
+		m.status = "Finish the current action before starting another."
+		return nil
+	}
+	device := devices[min(m.selected, len(devices)-1)]
+	target, err := remoteopen.Validate(device.RemoteURL)
+	if err != nil {
+		m.status = "Remote setup required for " + device.Name + ". Press e and add a Remote URL."
+		return nil
+	}
+	opener := m.openRemote
+	if opener == nil {
+		opener = remoteopen.Open
+	}
+	m.opening = true
+	m.action = "remote"
+	m.status = "Opening remote for " + device.Name + "..."
+	m.motion.Trigger(time.Now(), 900*time.Millisecond)
+	openCmd := func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return remoteResultMsg{deviceName: device.Name, err: opener(ctx, target)}
+	}
+	return tea.Batch(openCmd, m.motionTick())
 }
 
 func (m *WakeModel) ensurePresence() {
@@ -453,7 +529,7 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 
 func (m *WakeModel) beginAdd() {
 	if m.tab == 0 {
-		m.form = &wakeForm{kind: deviceForm, labels: deviceFormLabels(), values: make([]string, 9)}
+		m.form = &wakeForm{kind: deviceForm, labels: deviceFormLabels(), values: make([]string, 10)}
 		m.form.values[4] = "9"
 		m.status = "Add machine: fill each field and press Enter."
 		return
@@ -472,7 +548,7 @@ func (m *WakeModel) beginEdit() {
 			return
 		}
 		device := devices[m.selected]
-		m.form = &wakeForm{kind: deviceForm, id: device.ID, labels: deviceFormLabels(), values: []string{device.Name, device.MACAddress, device.IPAddress, device.BroadcastAddress, strconv.Itoa(device.Port), device.Interface, strconv.Itoa(device.VerifyPort), device.WakeStrategy, device.WakeRelayID}}
+		m.form = &wakeForm{kind: deviceForm, id: device.ID, labels: deviceFormLabels(), values: []string{device.Name, device.MACAddress, device.IPAddress, device.BroadcastAddress, strconv.Itoa(device.Port), device.Interface, strconv.Itoa(device.VerifyPort), device.WakeStrategy, device.WakeRelayID, device.RemoteURL}}
 		m.status = "Edit machine: press Enter to advance and save."
 		return
 	}
@@ -601,7 +677,30 @@ func (m *WakeModel) saveForm() tea.Cmd {
 		if strategy == "" {
 			strategy = "broadcast"
 		}
-		item := store.Device{Name: strings.TrimSpace(values[0]), MACAddress: strings.TrimSpace(values[1]), IPAddress: strings.TrimSpace(values[2]), BroadcastAddress: strings.TrimSpace(values[3]), Port: port, Interface: strings.TrimSpace(values[5]), VerifyPort: verifyPort, WakeStrategy: strategy, WakeRelayID: strings.TrimSpace(values[8]), DeviceType: "unknown", Platform: "unknown", Enabled: true}
+		remoteURL := strings.TrimSpace(values[9])
+		if remoteURL != "" {
+			remoteURL, err = remoteopen.Validate(remoteURL)
+			if err != nil {
+				return formSavedMsg{message: "Machine save failed: " + err.Error() + ".", keep: true}
+			}
+		}
+		item := store.Device{DeviceType: "unknown", Platform: "unknown", Enabled: true}
+		if form.id != "" {
+			item, err = m.repository.GetDevice(ctx, form.id)
+			if err != nil {
+				return formSavedMsg{message: "Machine save failed: machine no longer exists.", keep: true}
+			}
+		}
+		item.Name = strings.TrimSpace(values[0])
+		item.MACAddress = strings.TrimSpace(values[1])
+		item.IPAddress = strings.TrimSpace(values[2])
+		item.BroadcastAddress = strings.TrimSpace(values[3])
+		item.Port = port
+		item.Interface = strings.TrimSpace(values[5])
+		item.VerifyPort = verifyPort
+		item.WakeStrategy = strategy
+		item.WakeRelayID = strings.TrimSpace(values[8])
+		item.RemoteURL = remoteURL
 		var saveErr error
 		if form.id == "" {
 			_, saveErr = m.repository.CreateDevice(ctx, item)
@@ -627,7 +726,7 @@ func parseFormInt(value string, fallback int) (int, error) {
 }
 
 func deviceFormLabels() []string {
-	return []string{"Name", "MAC address", "IP address", "Broadcast", "UDP port", "Interface", "Verify port", "Wake strategy", "Relay ID"}
+	return []string{"Name", "MAC address", "IP address", "Broadcast", "UDP port", "Interface", "Verify port", "Wake strategy", "Relay ID", "Remote URL"}
 }
 
 func relayFormLabels() []string {
@@ -656,6 +755,16 @@ func filterMessage(value string) string {
 		return "Showing all machines."
 	}
 	return "Filtering machines by " + value + "."
+}
+
+func statusNeedsAttention(value string) bool {
+	value = strings.ToLower(value)
+	for _, word := range []string{"failed", "invalid", "required", "unavailable", "could not"} {
+		if strings.Contains(value, word) {
+			return true
+		}
+	}
+	return false
 }
 
 func routeLabel(route wakeservice.Route) string {
@@ -695,7 +804,8 @@ func (m *WakeModel) View() string {
 			builder.WriteString(m.renderMachines(inner, mode))
 		}
 	}
-	if m.status != "" {
+	showStatus := m.height <= 0 || m.height >= 22 || m.loading || m.waking || m.opening || m.checking || statusNeedsAttention(m.status)
+	if m.status != "" && showStatus {
 		status := m.status
 		if m.motion.Active(time.Now()) {
 			frames := []string{"◐", "◓", "◑", "◒"}
@@ -715,7 +825,9 @@ func (m *WakeModel) View() string {
 	if m.showHelp {
 		builder.WriteString("\n" + renderPanel(m.theme, "WAKE DESK KEYS", "actions stay local", strings.Join([]string{
 			"j/k or arrows   move selection",
-			"Enter           wake selected machine",
+			"Enter           run the selected machine's primary action",
+			"o               open configured remote session",
+			"w               send wake packet",
 			"f               force wake",
 			"s               check selected power status",
 			"r               refresh inventory + power scan",
@@ -761,7 +873,7 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 	}
 	if mode == LayoutCompact || m.height < 34 {
 		fleet := m.renderMachineList(devices, width)
-		if len(devices) > 0 && (m.waking || m.motion.Active(time.Now())) {
+		if len(devices) > 0 && (m.waking || m.opening || m.motion.Active(time.Now())) {
 			return fleet + "\n" + m.renderSignalPath(devices[min(m.selected, len(devices)-1)], width)
 		}
 		return fleet
@@ -771,42 +883,88 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 
 func (m *WakeModel) renderMachineList(devices []store.Device, width int) string {
 	online, offline, unknown, disabled, checking, ready, blocked := m.machineSummary(devices)
+	remoteConfigured, remoteSetup := remoteSummary(devices)
 	rowWidth := max(1, width-4)
 	rows := []string{
 		fmt.Sprintf("MACHINES  %d total", len(devices)),
 		fitText(fmt.Sprintf("POWER  %d online · %d offline · %d unknown%s%s", online, offline, unknown, summaryCount("checking", checking), summaryCount("disabled", disabled)), rowWidth),
 		fitText(fmt.Sprintf("WAKE   %d ready · %d blocked", ready, blocked), rowWidth),
+		fitText(fmt.Sprintf("REMOTE %d configured · %d setup required", remoteConfigured, remoteSetup), rowWidth),
 	}
 	if len(devices) == 0 {
 		rows = append(rows, "No machines yet. Press a to add one.")
 	} else {
-		for i, device := range devices {
+		visible, start := m.machineViewport(devices, width)
+		if start > 0 {
+			rows = append(rows, m.theme.muted().Render(fmt.Sprintf("↑ %d machine(s) above", start)))
+		}
+		for i, device := range visible {
+			globalIndex := start + i
 			marker := " "
-			if i == m.selected {
+			if globalIndex == m.selected {
 				marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
 			}
 			power := m.deviceState(device)
 			wake := m.wakeCapability(device)
+			remote, _ := remoteCapability(device)
 			name := fitText(device.Name, max(1, rowWidth-2))
-			if i == m.selected {
+			if globalIndex == m.selected {
 				name = m.theme.accent().Render(name)
 			}
 			if width < 42 {
 				rows = append(rows, fitText(marker+" "+name, rowWidth))
-				rows = append(rows, fitText("  P "+statusBadge(m.theme, power)+" · W "+statusBadge(m.theme, wake.state), rowWidth))
-			} else if width < 70 {
-				rows = append(rows, fitText(marker+" "+name, rowWidth))
-				rows = append(rows, fitText("  POWER "+statusBadge(m.theme, power)+"  WAKE "+statusBadge(m.theme, wake.state), rowWidth))
+				rows = append(rows, fitText("  POWER  "+statusBadge(m.theme, power), rowWidth))
+				rows = append(rows, fitText("  WAKE   "+statusBadge(m.theme, wake.state), rowWidth))
+				rows = append(rows, fitText("  REMOTE "+statusBadge(m.theme, remote), rowWidth))
+			} else if width < 88 {
+				rows = append(rows, fitText(fmt.Sprintf("%s %-18s %s", marker, name, device.IPAddress), rowWidth))
+				rows = append(rows, fitText("  POWER "+statusBadge(m.theme, power)+" · WAKE "+statusBadge(m.theme, wake.state)+" · REMOTE "+statusBadge(m.theme, remote), rowWidth))
 			} else {
-				row := fmt.Sprintf("%s %-18s  P:%-8s  W:%-8s  %s", marker, name, statusBadge(m.theme, power), statusBadge(m.theme, wake.state), fitText(device.IPAddress, max(1, rowWidth-52)))
+				row := marker + " " + padVisible(name, 18) + " POWER " + padVisible(statusBadge(m.theme, power), 10) + " WAKE " + padVisible(statusBadge(m.theme, wake.state), 9) + " REMOTE " + padVisible(statusBadge(m.theme, remote), 13) + " " + device.IPAddress
 				rows = append(rows, fitText(row, rowWidth))
 			}
-			if i < len(devices)-1 && width < 70 {
+			if i < len(visible)-1 && width < 70 {
 				rows = append(rows, "")
 			}
 		}
+		if below := len(devices) - (start + len(visible)); below > 0 {
+			rows = append(rows, m.theme.muted().Render(fmt.Sprintf("↓ %d machine(s) below", below)))
+		}
 	}
 	return wakePanel(m.theme, "FLEET", "select a machine", strings.Join(rows, "\n"), width)
+}
+
+func (m *WakeModel) machineViewport(devices []store.Device, width int) ([]store.Device, int) {
+	if len(devices) == 0 || m.height <= 0 {
+		return devices, 0
+	}
+	baseRows, separator := 1, 0
+	if width < 42 {
+		baseRows, separator = 4, 1
+	} else if width < 70 {
+		baseRows, separator = 2, 1
+	} else if width < 88 {
+		baseRows = 2
+	}
+	budget := m.height - 16
+	if m.height < 22 {
+		budget = m.height - 15
+	}
+	budget = max(baseRows+1, budget)
+	count := len(devices)
+	for count > 1 {
+		rowCount := count*baseRows + max(0, count-1)*separator
+		if rowCount+2 <= budget {
+			break
+		}
+		count--
+	}
+	if count >= len(devices) {
+		return devices, 0
+	}
+	start := m.selected - count/2
+	start = max(0, min(start, len(devices)-count))
+	return devices[start : start+count], start
 }
 
 func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
@@ -817,35 +975,48 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	rowWidth := max(1, width-4)
 	power := m.deviceState(device)
 	wake := m.wakeCapability(device)
+	remote, remoteDetail := remoteCapability(device)
 	powerHint := ""
 	if power == "UNKNOWN" {
 		powerHint = "  · press s to check"
+	}
+	primary := "[Enter] Wake machine"
+	if remote == "CONFIGURED" {
+		primary = "[Enter] Open remote"
 	}
 	lines := []string{
 		m.theme.muted().Render("SELECTED"),
 		m.theme.title().Render(fitText(m.theme.Glyph("arrow")+" "+device.Name, rowWidth)),
 		fitText("POWER  "+statusBadge(m.theme, power)+powerHint, rowWidth),
 		fitText("WAKE   "+statusBadge(m.theme, wake.state)+"  ·  "+wake.detail, rowWidth),
+		fitText("REMOTE "+statusBadge(m.theme, remote)+"  ·  "+remoteDetail, rowWidth),
+		"",
+		m.theme.accent().Render(fitText("PRIMARY  "+primary, rowWidth)),
+		m.theme.muted().Render(fitText("Also: o open remote · w wake · s check power", rowWidth)),
 		"",
 		fitText("IP     "+device.IPAddress, rowWidth),
 		fitText("MAC    "+device.MACAddress, rowWidth),
 		fitText("PATH   "+m.routeText(device), rowWidth),
 		fitText("CHECK  "+verifyText(device), rowWidth),
-		"",
-		m.theme.muted().Render("Enter wake  ·  s check power  ·  f force"),
 	}
-	if m.waking || m.motion.Active(time.Now()) {
-		lines = append(lines[:4], append([]string{m.renderSignalPath(device, rowWidth), ""}, lines[4:]...)...)
+	if m.waking || m.opening || m.motion.Active(time.Now()) {
+		lines = append(lines[:5], append([]string{m.renderSignalPath(device, rowWidth), ""}, lines[5:]...)...)
 	}
-	return wakePanel(m.theme, "INSPECTOR", "selected machine", strings.Join(lines, "\n"), width)
+	return wakePanel(m.theme, "ACTION DECK", "selected machine", strings.Join(lines, "\n"), width)
 }
 
 func (m *WakeModel) renderSignalPath(device store.Device, width int) string {
+	if m.action == "remote" {
+		return m.renderActionPath([]string{"DESK", "HANDOFF", "REMOTE"}, width)
+	}
 	route := "LAN"
 	if strings.EqualFold(device.WakeStrategy, "relay") || device.WakeRelayID != "" {
 		route = "RELAY"
 	}
-	steps := []string{"DESK", route, strings.ToUpper(fitText(device.Name, 12))}
+	return m.renderActionPath([]string{"DESK", route, strings.ToUpper(fitText(device.Name, 12))}, width)
+}
+
+func (m *WakeModel) renderActionPath(steps []string, width int) string {
 	connector := "──"
 	pulse := "●"
 	if m.theme.ASCII {
@@ -903,9 +1074,19 @@ func (m *WakeModel) renderActivity(width int) string {
 
 func (m *WakeModel) renderForm(width int) string {
 	form := m.form
-	rows := make([]string, 0, len(form.labels)+2)
+	start, end := 0, len(form.labels)
+	if m.height > 0 && m.height < 32 && len(form.labels) > 6 {
+		start = max(0, form.selected-3)
+		end = min(len(form.labels), start+6)
+		start = max(0, end-6)
+	}
+	rows := make([]string, 0, end-start+4)
 	rows = append(rows, "Enter saves the final field · Tab/↑↓ moves · Esc cancels", "")
-	for i, label := range form.labels {
+	if start > 0 {
+		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("↑ %d earlier field(s)", start)))
+	}
+	for i := start; i < end; i++ {
+		label := form.labels[i]
 		marker := " "
 		if i == form.selected {
 			marker = m.theme.Glyph("arrow")
@@ -915,6 +1096,9 @@ func (m *WakeModel) renderForm(width int) string {
 			value += "_"
 		}
 		rows = append(rows, fmt.Sprintf("%s %-18s %s", marker, label, fitText(value, max(12, width-26))))
+	}
+	if end < len(form.labels) {
+		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("↓ %d more field(s)", len(form.labels)-end)))
 	}
 	if form.error != "" {
 		rows = append(rows, "", m.theme.danger().Render(form.error))
@@ -927,7 +1111,15 @@ func (m *WakeModel) renderForm(width int) string {
 }
 
 func (m *WakeModel) footer(width int) string {
-	return fitText(m.theme.muted().Render("[j/k] move  [Enter] wake  [s] check power  [r] refresh  [a/e/d] manage  [1-3] views  [/] filter  [?] help  [q] quit"), width)
+	primary := "wake"
+	devices := m.filteredDevices()
+	if len(devices) > 0 {
+		device := devices[min(m.selected, len(devices)-1)]
+		if state, _ := remoteCapability(device); state == "CONFIGURED" {
+			primary = "remote"
+		}
+	}
+	return fitText(m.theme.muted().Render("[j/k] move  [Enter] "+primary+"  [o] remote  [w] wake  [s] power  [r] refresh  [a/e/d] manage  [?] help  [q] quit"), width)
 }
 
 func (m *WakeModel) deviceState(device store.Device) string {
@@ -985,6 +1177,30 @@ func (m *WakeModel) wakeCapability(device store.Device) wakeCapability {
 		return wakeCapability{state: "BLOCKED", detail: "invalid UDP port"}
 	}
 	return wakeCapability{state: "READY", detail: fmt.Sprintf("direct broadcast %s:%d", destination, port)}
+}
+
+func remoteCapability(device store.Device) (state, detail string) {
+	if strings.TrimSpace(device.RemoteURL) == "" {
+		return "SETUP", "press e to add a Remote URL"
+	}
+	validated, err := remoteopen.Validate(device.RemoteURL)
+	if err != nil {
+		return "INVALID", "edit the Remote URL"
+	}
+	parsed, _ := url.Parse(validated)
+	return "CONFIGURED", parsed.Scheme + "://" + parsed.Host
+}
+
+func remoteSummary(devices []store.Device) (configured, setup int) {
+	for _, device := range devices {
+		state, _ := remoteCapability(device)
+		if state == "CONFIGURED" {
+			configured++
+		} else {
+			setup++
+		}
+	}
+	return configured, setup
 }
 
 func (m *WakeModel) routeText(device store.Device) string {
@@ -1083,13 +1299,13 @@ func statusBadge(theme Theme, state string) string {
 
 func statusGlyph(theme Theme, state string) string {
 	switch strings.ToUpper(strings.TrimSpace(state)) {
-	case "ONLINE", "READY", "SENT", "REACHABLE":
+	case "ONLINE", "READY", "SENT", "REACHABLE", "CONFIGURED":
 		return theme.Glyph("signal-ready")
 	case "OFFLINE":
 		return theme.Glyph("signal-stopped")
 	case "CHECKING", "SENDING":
 		return theme.Glyph("signal-busy")
-	case "FAILED", "DISABLED", "BLOCKED", "TIMEOUT":
+	case "FAILED", "DISABLED", "BLOCKED", "TIMEOUT", "INVALID":
 		return theme.Glyph("signal-failed")
 	default:
 		return "?"
@@ -1098,9 +1314,9 @@ func statusGlyph(theme Theme, state string) string {
 
 func stateStyle(theme Theme, state string) lipgloss.Style {
 	switch strings.ToUpper(state) {
-	case "ONLINE", "READY", "SENT", "REACHABLE":
+	case "ONLINE", "READY", "SENT", "REACHABLE", "CONFIGURED":
 		return theme.success()
-	case "FAILED", "DISABLED", "BLOCKED", "TIMEOUT", "OFFLINE":
+	case "FAILED", "DISABLED", "BLOCKED", "TIMEOUT", "OFFLINE", "INVALID":
 		return theme.danger()
 	case "SENDING", "CHECKING":
 		return theme.accent()
