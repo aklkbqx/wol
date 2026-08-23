@@ -1,0 +1,12 @@
+.DS_Store
+wol.db
+*.db
+*.db-shm
+*.db-wal
+.data/
+dist/
+.env
+.env.*
+!.env.example
+.wol.env
+
