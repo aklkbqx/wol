@@ -69,11 +69,28 @@ func truncateANSI(text string, width int) string {
 	}
 	plain := stripANSI(text)
 	runes := []rune(plain)
-	if len(runes) <= width {
+	if lipgloss.Width(plain) <= width {
 		return text
 	}
 	if width <= 3 {
-		return string(runes[:width])
+		return visiblePrefix(runes, width)
 	}
-	return string(runes[:width-3]) + "..."
+	return visiblePrefix(runes, width-3) + "..."
+}
+
+func visiblePrefix(runes []rune, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	used := 0
+	end := 0
+	for index, value := range runes {
+		cellWidth := lipgloss.Width(string(value))
+		if used+cellWidth > width {
+			break
+		}
+		used += cellWidth
+		end = index + 1
+	}
+	return string(runes[:end])
 }

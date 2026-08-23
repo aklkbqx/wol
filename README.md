@@ -5,7 +5,7 @@ local machine inventory directly from SQLite. Wake and inventory features do
 not require a web application or hosted service.
 
 ```text
-WOL WAKE DESK  v0.3.2  ·  Credit: aklkbqx
+WOL WAKE DESK  v0.4.0  ·  Credit: aklkbqx
 LOCAL INVENTORY  ·  compact
 
 1 Machines   2 Routes   3 Activity
@@ -25,7 +25,7 @@ normal state for a machine that can be woken.
 
 ## Install
 
-Requires Go 1.26 or newer:
+Requires Go 1.26.6 or newer:
 
 ```bash
 go install github.com/aklkbqx/wol/cmd/wol@latest
@@ -53,9 +53,9 @@ wol                         # interactive Wake Desk
 wol wake --device windows   # wake a stored machine
 wol remote windows          # wake if needed, then open a localhost remote
 wol remote --no-wake windows  # require it online; never send a wake packet
-wol remote configure --protocol rdp --host 192.168.50.200 windows
+wol remote configure --protocol rdp --host 192.168.50.200 --certificate strict windows
 wol remote clear windows    # remove the machine's remote profile
-wol remote doctor           # check the optional local remote toolchain
+wol remote doctor windows   # check the runtime and this target
 wol remote setup            # pull the pinned local remote containers
 wol status windows          # check its current power state
 wol wake AA:BB:CC:DD:EE:FF  # send directly to a MAC address
@@ -72,30 +72,35 @@ claim the machine has finished booting.
 
 Remote access is an optional local companion to Wake-on-LAN, not an external
 website. A remote profile stores only the connection protocol, host, ports,
-mode, and an optional username hint. It never stores a hosted remote URL or a
-password.
+mode, certificate policy, and optional username/domain hints. It never stores a
+hosted remote URL or a password.
 
 Configure a machine for RDP, VNC, or SSH:
 
 ```bash
-wol remote configure --protocol rdp --host 192.168.50.200 --port 3389 windows
+wol remote configure --protocol rdp --host 192.168.50.200 --port 3389 --certificate trust-local windows
 wol remote configure --protocol ssh --host 192.168.50.5 --port 22 private
-wol remote doctor
+wol remote doctor windows
 wol remote setup
 ```
 
 The full profile command is:
 
 ```text
-wol remote configure [--db path] [--protocol rdp|vnc|ssh] [--host HOST] [--port N] [--verify-port N] [--username USER] <machine>
+wol remote configure [--db path] [--protocol rdp|vnc|ssh] [--host HOST] [--port N] [--verify-port N] [--username USER] [--domain DOMAIN] [--certificate strict|trust-local] <machine>
 ```
 
 `wol remote NAME` checks the machine, wakes it when necessary, starts an
 ephemeral browser session on `127.0.0.1` using pinned Apache Guacamole
-containers, and opens the one-time localhost URL. The listener is not exposed
-to the LAN or internet and stops with the CLI session. Docker is required only
+containers, and opens a one-time localhost sign-in. Credentials are accepted
+by that loopback session only, encrypted into a short-lived launch token, and
+never written to SQLite, exports, command arguments, or logs. The listener is
+not exposed to the LAN or internet and stops with the CLI session. Docker is required only
 for this browser-based remote flow. Run `wol remote doctor` for a read-only
-check; `wol remote setup` downloads the required pinned images.
+check; `wol remote doctor NAME` also checks the selected profile and service.
+`wol remote setup` downloads the required pinned images. The default RDP
+certificate policy is `strict`; use `trust-local` only for a private machine
+whose self-signed RDP certificate you explicitly trust.
 
 Use `wol remote --no-wake NAME` when the target must already be online and the
 command must not send a wake packet.

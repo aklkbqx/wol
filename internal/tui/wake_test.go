@@ -43,7 +43,7 @@ func TestWakeDeskViewFitsTerminalWidths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, width := range []int{18, 24, 40, 60, 80, 110, 140} {
+	for _, width := range []int{4, 8, 12, 18, 24, 40, 60, 80, 110, 140} {
 		model.width, model.height = width, 32
 		for _, colors := range []bool{false, true} {
 			model.theme = NewTheme(colors, !colors)
@@ -81,6 +81,38 @@ func TestWakeDeskSignalPathOnlyAppearsDuringWake(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "DESK *--> LAN --> WINDOWS") {
 		t.Fatalf("wake view missing signal path:\n%s", view)
+	}
+}
+
+func TestRemoteResultStaysBoundToOriginalTargetAfterSelectionMoves(t *testing.T) {
+	model := &WakeModel{
+		width: 120, height: 34, theme: NewTheme(false, true), motion: NewMotion(false), phase: phaseReady,
+		devices:  []store.Device{{ID: "windows", Name: "windows", Enabled: true}, {ID: "private2", Name: "private2", Enabled: true}},
+		presence: map[string]string{"windows": "offline", "private2": "offline"}, profiles: map[string]store.RemoteProfile{},
+		selected: 1, opening: true, actionID: 7, actionTargetID: "windows", actionTarget: "windows", action: "wake-remote",
+	}
+	model.Update(remoteResultMsg{operationID: 7, targetID: "windows", deviceName: "windows"})
+	if model.presence["windows"] != "online" || model.presence["private2"] != "offline" || !strings.Contains(model.status, "windows · local sign-in opened") {
+		t.Fatalf("result moved to current selection: presence=%v status=%q", model.presence, model.status)
+	}
+
+	before := model.status
+	model.Update(remoteResultMsg{operationID: 6, targetID: "private2", deviceName: "private2"})
+	if model.status != before || model.presence["private2"] != "offline" {
+		t.Fatalf("stale operation changed state: presence=%v status=%q", model.presence, model.status)
+	}
+}
+
+func TestActiveActionPanelNamesOriginalTarget(t *testing.T) {
+	model := &WakeModel{
+		width: 120, height: 34, theme: NewTheme(false, true), motion: NewMotion(false), phase: phaseReady,
+		devices:  []store.Device{{ID: "windows", Name: "windows", Enabled: true}, {ID: "private2", Name: "private2", Enabled: true}},
+		presence: map[string]string{}, profiles: map[string]store.RemoteProfile{}, selected: 1,
+		waking: true, actionID: 4, actionTargetID: "windows", actionTarget: "windows", action: "wake-wait",
+	}
+	view := stripANSI(model.View())
+	if !strings.Contains(view, "ACTIVE FOR windows") || !strings.Contains(view, "selection changed") {
+		t.Fatalf("active action was not target-bound after navigation:\n%s", view)
 	}
 }
 
@@ -596,8 +628,8 @@ func TestSinglePowerCheckUsesFocusedLoadingWithoutMutatingVisibleStatus(t *testi
 		t.Fatalf("check returned %T", cmd())
 	}
 	model.Update(message)
-	if model.phase != phaseReady || model.presence["one"] != "online" || model.checkedAt.IsZero() {
-		t.Fatalf("focused result was not committed: phase=%v presence=%v checked=%v", model.phase, model.presence, model.checkedAt)
+	if model.phase != phaseReady || model.presence["one"] != "online" || model.checkedDevice["one"].IsZero() || !model.checkedAt.IsZero() {
+		t.Fatalf("focused result was not committed independently: phase=%v presence=%v deviceChecked=%v fleetChecked=%v", model.phase, model.presence, model.checkedDevice, model.checkedAt)
 	}
 }
 

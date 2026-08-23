@@ -22,13 +22,24 @@ type Opener func(context.Context, string) error
 
 // Config describes a single local browser-remote session.
 type Config struct {
-	Protocol     string
-	Host         string
-	Port         int
-	UsernameHint string
-	Runner       Runner
-	Opener       Opener
-	OpenBrowser  bool
+	Protocol          string
+	Host              string
+	Port              int
+	UsernameHint      string
+	DomainHint        string
+	CertificatePolicy string
+	Runner            Runner
+	Opener            Opener
+	OpenBrowser       bool
+}
+
+// Credentials live only in the loopback broker for the few milliseconds needed
+// to build an encrypted, short-lived Guacamole launch token. They are never
+// persisted by WOL.
+type Credentials struct {
+	Username string
+	Domain   string
+	Password string
 }
 
 // Session is a running localhost broker and its private Docker sidecars.
@@ -77,12 +88,6 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 		defer cancel()
 		return nil, joinErrors(err, docker.close(cleanupCtx))
 	}
-	launchToken, err := buildAuthToken(key, cfg, time.Now())
-	if err != nil {
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		return nil, joinErrors(err, docker.close(cleanupCtx))
-	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -106,7 +111,7 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 		return nil, joinErrors(err, docker.close(cleanupCtx))
 	}
 	upstream, _ := url.Parse(upstreamURL)
-	broker := newBroker(expectedHost, oneTimeToken, cookieToken, launchToken, upstream)
+	broker := newBroker(expectedHost, oneTimeToken, cookieToken, cfg, key, upstream)
 	server := &http.Server{
 		Handler:           broker,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -169,6 +174,18 @@ func validateConfig(cfg Config) error {
 	if strings.TrimSpace(cfg.UsernameHint) != cfg.UsernameHint || len(cfg.UsernameHint) > 128 || strings.ContainsAny(cfg.UsernameHint, "\r\n\x00") {
 		return errors.New("local remote: invalid username hint")
 	}
+	if strings.TrimSpace(cfg.DomainHint) != cfg.DomainHint || len(cfg.DomainHint) > 128 || strings.ContainsAny(cfg.DomainHint, "\r\n\x00") {
+		return errors.New("local remote: invalid domain hint")
+	}
+	if cfg.CertificatePolicy == "" {
+		cfg.CertificatePolicy = "strict"
+	}
+	if cfg.CertificatePolicy != "strict" && cfg.CertificatePolicy != "trust-local" {
+		return errors.New("local remote: certificate policy must be strict or trust-local")
+	}
+	if cfg.CertificatePolicy == "trust-local" && cfg.Protocol != "rdp" {
+		return errors.New("local remote: trust-local certificate policy is only valid for RDP")
+	}
 	return nil
 }
 
@@ -176,13 +193,15 @@ type brokerHandler struct {
 	expectedHost string
 	oneTimeToken string
 	cookieToken  string
+	config       Config
+	key          []byte
 	launchToken  string
 	proxy        *httputil.ReverseProxy
 	mu           sync.Mutex
 	consumed     bool
 }
 
-func newBroker(expectedHost, oneTimeToken, cookieToken, launchToken string, upstream *url.URL) http.Handler {
+func newBroker(expectedHost, oneTimeToken, cookieToken string, cfg Config, key []byte, upstream *url.URL) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
@@ -210,7 +229,7 @@ func newBroker(expectedHost, oneTimeToken, cookieToken, launchToken string, upst
 		}
 		return nil
 	}
-	return &brokerHandler{expectedHost: expectedHost, oneTimeToken: oneTimeToken, cookieToken: cookieToken, launchToken: launchToken, proxy: proxy}
+	return &brokerHandler{expectedHost: expectedHost, oneTimeToken: oneTimeToken, cookieToken: cookieToken, config: cfg, key: append([]byte(nil), key...), proxy: proxy}
 }
 
 func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +248,11 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path == "/session":
-		servePage(w, b.launchToken)
+		serveLoginPage(w, b.config, "")
+	case r.URL.Path == "/connect":
+		b.connect(w, r)
+	case r.URL.Path == "/remote":
+		b.remote(w, r)
 	case r.URL.Path == "/healthz":
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
@@ -238,6 +261,65 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed.", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+	if err := r.ParseForm(); err != nil {
+		serveLoginPage(w, b.config, "Could not read the credentials. Please try again.")
+		return
+	}
+	credentials := Credentials{
+		Username: strings.TrimSpace(r.Form.Get("username")),
+		Domain:   strings.TrimSpace(r.Form.Get("domain")),
+		Password: r.Form.Get("password"),
+	}
+	if err := validateCredentials(b.config.Protocol, credentials); err != nil {
+		serveLoginPage(w, b.config, err.Error())
+		return
+	}
+	launchToken, err := buildAuthToken(b.key, b.config, credentials, time.Now())
+	credentials.Password = ""
+	if err != nil {
+		http.Error(w, "Unable to prepare the encrypted local session.", http.StatusInternalServerError)
+		return
+	}
+	b.mu.Lock()
+	b.launchToken = launchToken
+	b.mu.Unlock()
+	http.Redirect(w, r, "/remote", http.StatusSeeOther)
+}
+
+func validateCredentials(protocol string, credentials Credentials) error {
+	if len(credentials.Username) > 128 || strings.ContainsAny(credentials.Username, "\r\n\x00") {
+		return errors.New("Username is invalid.")
+	}
+	if len(credentials.Domain) > 128 || strings.ContainsAny(credentials.Domain, "\r\n\x00") {
+		return errors.New("Domain is invalid.")
+	}
+	if len(credentials.Password) > 4096 || strings.ContainsRune(credentials.Password, '\x00') {
+		return errors.New("Password is invalid.")
+	}
+	if protocol == "ssh" && credentials.Username == "" {
+		return errors.New("SSH requires a username.")
+	}
+	return nil
+}
+
+func (b *brokerHandler) remote(w http.ResponseWriter, r *http.Request) {
+	b.mu.Lock()
+	launchToken := b.launchToken
+	b.launchToken = ""
+	b.mu.Unlock()
+	if launchToken == "" {
+		http.Redirect(w, r, "/session", http.StatusSeeOther)
+		return
+	}
+	servePage(w, launchToken)
 }
 
 func (b *brokerHandler) consume(w http.ResponseWriter, r *http.Request) {

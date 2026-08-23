@@ -41,13 +41,22 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(value), nil
 }
 
-func buildAuthToken(key []byte, cfg Config, now time.Time) (string, error) {
+func buildAuthToken(key []byte, cfg Config, credentials Credentials, now time.Time) (string, error) {
 	parameters := map[string]string{
 		"hostname": cfg.Host,
 		"port":     fmt.Sprintf("%d", cfg.Port),
 	}
-	if cfg.UsernameHint != "" {
-		parameters["username"] = cfg.UsernameHint
+	if credentials.Username != "" {
+		parameters["username"] = credentials.Username
+	}
+	if credentials.Domain != "" && cfg.Protocol == "rdp" {
+		parameters["domain"] = credentials.Domain
+	}
+	if credentials.Password != "" {
+		parameters["password"] = credentials.Password
+	}
+	if cfg.Protocol == "rdp" && cfg.CertificatePolicy == "trust-local" {
+		parameters["ignore-cert"] = "true"
 	}
 	document := authDocument{
 		Username: "local-wol-session",
@@ -60,9 +69,11 @@ func buildAuthToken(key []byte, cfg Config, now time.Time) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encode Guacamole launch document: %w", err)
 	}
+	defer clear(plaintext)
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(plaintext)
 	signed := append(mac.Sum(nil), plaintext...)
+	defer clear(signed)
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("create Guacamole token cipher: %w", err)

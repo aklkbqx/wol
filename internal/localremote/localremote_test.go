@@ -157,7 +157,7 @@ func TestCleanupOrphansRemovesOnlyDeadOwners(t *testing.T) {
 
 func TestBuildAuthTokenMatchesGuacamoleJSONAuthFormat(t *testing.T) {
 	key := []byte("0123456789abcdef")
-	token, err := buildAuthToken(key, Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389, UsernameHint: "desktop-user"}, time.Unix(1_700_000_000, 0))
+	token, err := buildAuthToken(key, Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389, CertificatePolicy: "trust-local"}, Credentials{Username: "desktop-user", Domain: "WORK", Password: "session-only"}, time.Unix(1_700_000_000, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,11 +181,8 @@ func TestBuildAuthTokenMatchesGuacamoleJSONAuthFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	connection := got.Connections["Remote session"]
-	if got.Expires != 1_700_000_120_000 || connection.Protocol != "rdp" || connection.Parameters["hostname"] != "192.168.50.200" || connection.Parameters["username"] != "desktop-user" {
+	if got.Expires != 1_700_000_120_000 || connection.Protocol != "rdp" || connection.Parameters["hostname"] != "192.168.50.200" || connection.Parameters["username"] != "desktop-user" || connection.Parameters["domain"] != "WORK" || connection.Parameters["password"] != "session-only" || connection.Parameters["ignore-cert"] != "true" {
 		t.Fatalf("document = %#v", got)
-	}
-	if _, found := connection.Parameters["password"]; found {
-		t.Fatal("launch token must not contain a password")
 	}
 }
 
@@ -204,7 +201,7 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	server.Listener = listener
 	host := listener.Addr().String()
-	server.Config.Handler = newBroker(host, "once", "cookie", "encrypted", upstreamURL)
+	server.Config.Handler = newBroker(host, "once", "cookie", Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389, UsernameHint: "desktop-user", CertificatePolicy: "strict"}, []byte("0123456789abcdef"), upstreamURL)
 	server.Start()
 	defer server.Close()
 
@@ -237,8 +234,33 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "LOCAL REMOTE") || !strings.Contains(string(body), "/guacamole/?data=encrypted") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "WOL LOCAL REMOTE") || !strings.Contains(string(body), "desktop-user") || strings.Contains(string(body), "/guacamole/?data=") {
 		t.Fatalf("page status/body = %d %q", response.StatusCode, body)
+	}
+
+	req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("username=desktop-user&domain=WORK&password=session-only"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://"+host)
+	req.AddCookie(cookie)
+	response, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/remote" {
+		t.Fatalf("connect status/location = %d %q", response.StatusCode, response.Header.Get("Location"))
+	}
+	_ = response.Body.Close()
+
+	req, _ = http.NewRequest(http.MethodGet, server.URL+"/remote", nil)
+	req.AddCookie(cookie)
+	response, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "/guacamole/?data=") || strings.Contains(string(body), "session-only") || strings.Contains(string(body), "Connected through localhost") {
+		t.Fatalf("remote page status/body = %d %q", response.StatusCode, body)
 	}
 
 	for _, mutate := range []func(*http.Request){
