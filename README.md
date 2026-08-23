@@ -120,7 +120,11 @@ wake configuration. WOL never sends this remote flow to a hosted endpoint.
 The action picker always presents **Wake only** and **Wake & Remote** as
 separate choices. The latter is disabled until the selected machine has a
 valid remote profile. The interface adapts to narrow, compact, and wide
-terminals. Motion appears only while a wake or local remote startup is active.
+terminals. On startup, refresh, and a selected-machine power check, Wake Desk
+shows a focused checking screen and reveals the fleet only after the complete
+snapshot is verified. A failed refresh keeps the last verified snapshot and
+marks it stale; `Esc` cancels an in-progress refresh or power check. Motion is
+limited to active work such as verification, wake, or local remote startup.
 Use `WOL_TUI_REDUCED_MOTION=1` or `WOL_TUI_MOTION=off` to disable it,
 `WOL_TUI_ASCII=1` for ASCII glyphs, and `NO_COLOR=1` to disable color.
 

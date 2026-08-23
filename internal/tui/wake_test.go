@@ -35,6 +35,8 @@ func TestWakeDeskViewFitsTerminalWidths(t *testing.T) {
 	}
 
 	model := NewWakeModel(repository, "0.3.0", "aklkbqx")
+	model.phase, model.loading = phaseReady, false
+	model.checkedAt = time.Date(2026, 8, 24, 5, 27, 4, 0, time.Local)
 	model.theme = NewTheme(false, true)
 	model.devices = []store.Device{device}
 	model.relays, err = repository.ListWakeRelays(context.Background())
@@ -240,12 +242,12 @@ func TestWakeDeskRefreshStartsPresenceScan(t *testing.T) {
 		),
 	}
 	devices := []store.Device{{ID: "one", IPAddress: "192.168.50.200", VerifyPort: 3389, Enabled: true}}
-	cmd := model.startPresenceScan(devices)
-	if !model.checking || model.presence["one"] != "checking" {
-		t.Fatalf("scan did not mark device checking: %#v/%v", model.presence, model.checking)
+	cmd := model.startPresenceScan(devices, 7, loadingRefresh, context.Background())
+	if model.presence["one"] != "" {
+		t.Fatalf("scan changed the visible snapshot before completion: %#v", model.presence)
 	}
 	message, ok := cmd().(probeBatchMsg)
-	if !ok || message.summary.Online != 1 || message.statuses["one"] != "online" {
+	if !ok || message.requestID != 7 || message.kind != loadingRefresh || message.summary.Online != 1 || message.statuses["one"] != "online" {
 		t.Fatalf("scan message = %#v, want one online result", message)
 	}
 }
@@ -502,5 +504,168 @@ func TestActionPickerFitsResponsiveViewports(t *testing.T) {
 				t.Fatalf("%dx%d picker line %d overflows at %d: %q", size.width, size.height, lineNo, got, line)
 			}
 		}
+	}
+}
+
+func TestStartupHidesFleetUntilAtomicSnapshotIsVerified(t *testing.T) {
+	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	_, err = repository.CreateDevice(t.Context(), store.Device{Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := NewWakeModel(repository, "test", "aklkbqx")
+	model.theme = NewTheme(false, true)
+	model.motion = NewMotion(false)
+	model.detector = presence.NewDetector(
+		presence.WithTCPPorts(nil),
+		presence.WithPing(func(context.Context, string, time.Duration) (time.Duration, error) { return time.Millisecond, nil }),
+	)
+	data, ok := model.Init()().(wakeDataMsg)
+	if !ok {
+		t.Fatalf("initial command returned %T", model.Init()())
+	}
+	_, scan := model.Update(data)
+	if model.phase != phaseBootLoading || len(model.devices) != 0 || model.pending == nil {
+		t.Fatalf("inventory leaked before verification: phase=%v devices=%d pending=%v", model.phase, len(model.devices), model.pending != nil)
+	}
+	if view := model.View(); strings.Contains(view, "FLEET  select a machine") || strings.Contains(view, "MACHINES  ") || !strings.Contains(view, "CHECKING LATEST STATE") {
+		t.Fatalf("startup exposed the dashboard before verification:\n%s", view)
+	}
+	result, ok := scan().(probeBatchMsg)
+	if !ok {
+		t.Fatalf("scan returned %T", scan())
+	}
+	model.Update(result)
+	if model.phase != phaseReady || len(model.devices) != 1 || model.presence[model.devices[0].ID] != "online" || model.checkedAt.IsZero() {
+		t.Fatalf("verified snapshot was not committed: phase=%v devices=%d presence=%v checked=%v", model.phase, len(model.devices), model.presence, model.checkedAt)
+	}
+	if view := model.View(); !strings.Contains(view, "FLEET") || strings.Contains(view, "CHECKING LATEST STATE") {
+		t.Fatalf("verified dashboard did not replace loading:\n%s", view)
+	}
+}
+
+func TestRefreshFailureKeepsLastVerifiedSnapshot(t *testing.T) {
+	device := store.Device{ID: "old", Name: "saved", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.5", Enabled: true}
+	checked := time.Date(2026, 8, 24, 5, 27, 4, 0, time.Local)
+	model := &WakeModel{
+		width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false),
+		phase: phaseReady, devices: []store.Device{device}, presence: map[string]string{"old": "online"}, profiles: map[string]store.RemoteProfile{}, checkedAt: checked,
+	}
+	model.requestID = 10
+	model.phase, model.loadingKind, model.loadingStage, model.loading = phaseRefreshing, loadingRefresh, stageInventory, true
+	model.Update(wakeDataMsg{requestID: 10, kind: loadingRefresh, err: fmt.Errorf("disk busy")})
+	if model.phase != phaseReady || len(model.devices) != 1 || model.devices[0].ID != "old" || model.presence["old"] != "online" || !model.stale || !model.checkedAt.Equal(checked) {
+		t.Fatalf("refresh failure damaged snapshot: phase=%v devices=%v presence=%v stale=%v checked=%v", model.phase, model.devices, model.presence, model.stale, model.checkedAt)
+	}
+	if view := model.View(); !strings.Contains(view, "STALE") || !strings.Contains(view, "saved") {
+		t.Fatalf("stale recovery is not visible:\n%s", view)
+	}
+}
+
+func TestStaleAsyncResponseCannotOverwriteCurrentRequest(t *testing.T) {
+	model := &WakeModel{phase: phaseRefreshing, requestID: 12, loading: true, devices: []store.Device{{ID: "current", Name: "current"}}, presence: map[string]string{"current": "online"}}
+	model.Update(wakeDataMsg{requestID: 11, kind: loadingRefresh, devices: []store.Device{{ID: "stale", Name: "stale"}}})
+	if len(model.devices) != 1 || model.devices[0].ID != "current" || model.pending != nil || model.phase != phaseRefreshing {
+		t.Fatalf("stale response changed current state: devices=%v pending=%v phase=%v", model.devices, model.pending, model.phase)
+	}
+}
+
+func TestSinglePowerCheckUsesFocusedLoadingWithoutMutatingVisibleStatus(t *testing.T) {
+	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true}
+	model := &WakeModel{
+		width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false), phase: phaseReady,
+		devices: []store.Device{device}, presence: map[string]string{"one": "offline"}, profiles: map[string]store.RemoteProfile{},
+		detector: presence.NewDetector(
+			presence.WithTCPPorts(nil),
+			presence.WithPing(func(context.Context, string, time.Duration) (time.Duration, error) { return time.Millisecond, nil }),
+		),
+	}
+	cmd := model.probeSelected()
+	if model.phase != phaseCheckingMachine || model.presence["one"] != "offline" {
+		t.Fatalf("focused check changed visible state early: phase=%v presence=%v", model.phase, model.presence)
+	}
+	if view := model.View(); !strings.Contains(view, "CHECKING POWER") || !strings.Contains(view, "windows") || strings.Contains(view, "FLEET") {
+		t.Fatalf("focused check view is unclear:\n%s", view)
+	}
+	message, ok := cmd().(probeResultMsg)
+	if !ok {
+		t.Fatalf("check returned %T", cmd())
+	}
+	model.Update(message)
+	if model.phase != phaseReady || model.presence["one"] != "online" || model.checkedAt.IsZero() {
+		t.Fatalf("focused result was not committed: phase=%v presence=%v checked=%v", model.phase, model.presence, model.checkedAt)
+	}
+}
+
+func TestLoadingAndErrorViewsFitResponsiveTerminals(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}} {
+		for _, phase := range []viewPhase{phaseBootLoading, phaseRefreshing, phaseCheckingMachine, phaseLoadError} {
+			model := &WakeModel{
+				width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false),
+				phase: phase, loading: phase != phaseLoadError, loadingStage: stagePresence, loadingTarget: "a-very-long-workstation-name", loadingError: "Could not read the local inventory.",
+				devices: []store.Device{{ID: "one", Name: "saved"}}, pending: &wakeDataMsg{devices: []store.Device{{ID: "pending"}}},
+			}
+			view := model.View()
+			if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
+				t.Fatalf("%dx%d phase %v uses %d lines:\n%s", size.width, size.height, phase, lines, view)
+			}
+			for lineNo, line := range strings.Split(view, "\n") {
+				if got := lipgloss.Width(stripANSI(line)); got > size.width {
+					t.Fatalf("%dx%d phase %v line %d overflows at %d: %q", size.width, size.height, phase, lineNo, got, line)
+				}
+			}
+			if strings.Contains(view, "SQLite") || strings.Contains(view, "/Library/") {
+				t.Fatalf("loading view exposed storage details:\n%s", view)
+			}
+		}
+	}
+}
+
+func TestReducedMotionLoadingSignalIsStable(t *testing.T) {
+	model := &WakeModel{width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false), phase: phaseBootLoading, loadingStage: stagePresence}
+	first := model.loadingSignal(60)
+	model.frame = 99
+	if second := model.loadingSignal(60); first != second {
+		t.Fatalf("reduced-motion signal changed: %q != %q", first, second)
+	}
+}
+
+func TestEscapeCancelsRefreshAndRejectsItsLateResult(t *testing.T) {
+	device := store.Device{ID: "verified", Name: "verified", IPAddress: "192.168.50.5", Enabled: true}
+	ctx, cancel := context.WithCancel(context.Background())
+	model := &WakeModel{
+		phase: phaseRefreshing, loading: true, requestID: 7, loadContext: ctx, loadCancel: cancel,
+		devices: []store.Device{device}, presence: map[string]string{"verified": "online"},
+	}
+
+	model.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.phase != phaseReady || model.loading || model.requestID != 8 || !strings.Contains(model.status, "cancelled") {
+		t.Fatalf("refresh cancel state is wrong: phase=%v loading=%v request=%d status=%q", model.phase, model.loading, model.requestID, model.status)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("refresh context was not cancelled")
+	}
+
+	model.Update(probeBatchMsg{requestID: 7, statuses: map[string]string{"late": "offline"}})
+	if len(model.devices) != 1 || model.devices[0].ID != "verified" || model.presence["late"] != "" {
+		t.Fatalf("late refresh result changed verified state: devices=%v presence=%v", model.devices, model.presence)
+	}
+}
+
+func TestBootFailureOffersRetryWithoutExposingDashboard(t *testing.T) {
+	model := &WakeModel{
+		width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false),
+		phase: phaseBootLoading, loading: true, loadingKind: loadingBoot, requestID: 3,
+	}
+	model.Update(wakeDataMsg{requestID: 3, kind: loadingBoot, err: fmt.Errorf("database unavailable")})
+	view := model.View()
+	if model.phase != phaseLoadError || !strings.Contains(view, "[r] Retry") || strings.Contains(view, "FLEET  select a machine") {
+		t.Fatalf("boot recovery view is wrong:\n%s", view)
 	}
 }
