@@ -76,7 +76,9 @@ func (m *Manager) Open(ctx context.Context, device store.Device, profile store.R
 	stopActionCancel := context.AfterFunc(ctx, sessionCancel)
 	session, err := m.start(sessionCtx, localremote.Config{
 		Protocol: profile.Protocol, Host: profile.Host, Port: profile.Port,
-		UsernameHint: profile.UsernameHint, Opener: m.opener, OpenBrowser: true,
+		UsernameHint: profile.UsernameHint, DomainHint: profile.DomainHint,
+		CertificatePolicy: profile.CertificatePolicy,
+		Opener:            m.opener, OpenBrowser: true,
 	})
 	if err != nil {
 		stopActionCancel()

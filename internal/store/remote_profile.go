@@ -12,17 +12,19 @@ import (
 )
 
 type RemoteProfile struct {
-	ID           string `json:"id"`
-	DeviceID     string `json:"deviceId"`
-	Protocol     string `json:"protocol"`
-	Host         string `json:"host"`
-	Port         int    `json:"port"`
-	VerifyPort   int    `json:"verifyPort"`
-	UsernameHint string `json:"usernameHint,omitempty"`
-	Mode         string `json:"mode"`
-	Enabled      bool   `json:"enabled"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
+	ID                string `json:"id"`
+	DeviceID          string `json:"deviceId"`
+	Protocol          string `json:"protocol"`
+	Host              string `json:"host"`
+	Port              int    `json:"port"`
+	VerifyPort        int    `json:"verifyPort"`
+	UsernameHint      string `json:"usernameHint,omitempty"`
+	DomainHint        string `json:"domainHint,omitempty"`
+	CertificatePolicy string `json:"certificatePolicy,omitempty"`
+	Mode              string `json:"mode"`
+	Enabled           bool   `json:"enabled"`
+	CreatedAt         string `json:"createdAt"`
+	UpdatedAt         string `json:"updatedAt"`
 }
 
 var hostnamePattern = regexp.MustCompile(`(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$`)
@@ -32,6 +34,8 @@ func normalizeRemoteProfile(item RemoteProfile) (RemoteProfile, error) {
 	item.Protocol = strings.ToLower(strings.TrimSpace(item.Protocol))
 	item.Host = strings.TrimSpace(item.Host)
 	item.UsernameHint = strings.TrimSpace(item.UsernameHint)
+	item.DomainHint = strings.TrimSpace(item.DomainHint)
+	item.CertificatePolicy = strings.ToLower(strings.TrimSpace(item.CertificatePolicy))
 	item.Mode = strings.ToLower(strings.TrimSpace(item.Mode))
 	if item.DeviceID == "" {
 		return RemoteProfile{}, errors.New("remote profile device is required")
@@ -85,16 +89,29 @@ func normalizeRemoteProfile(item RemoteProfile) (RemoteProfile, error) {
 	if len(item.UsernameHint) > 128 || strings.ContainsAny(item.UsernameHint, "\r\n\x00") {
 		return RemoteProfile{}, errors.New("remote username hint is invalid")
 	}
+	if len(item.DomainHint) > 128 || strings.ContainsAny(item.DomainHint, "\r\n\x00") {
+		return RemoteProfile{}, errors.New("remote domain hint is invalid")
+	}
+	if item.CertificatePolicy == "" {
+		item.CertificatePolicy = "strict"
+	}
+	if item.CertificatePolicy != "strict" && item.CertificatePolicy != "trust-local" {
+		return RemoteProfile{}, errors.New("remote certificate policy must be strict or trust-local")
+	}
+	if item.Protocol != "rdp" {
+		item.CertificatePolicy = "strict"
+		item.DomainHint = ""
+	}
 	return item, nil
 }
 
 func (s *Store) GetRemoteProfile(ctx context.Context, deviceID string) (RemoteProfile, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, device_id, protocol, host, port, verify_port, username_hint, mode, enabled, created_at, updated_at FROM remote_profiles WHERE device_id = ?`, strings.TrimSpace(deviceID))
+	row := s.db.QueryRowContext(ctx, `SELECT id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, enabled, created_at, updated_at FROM remote_profiles WHERE device_id = ?`, strings.TrimSpace(deviceID))
 	return scanRemoteProfile(row)
 }
 
 func (s *Store) ListRemoteProfiles(ctx context.Context) ([]RemoteProfile, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, device_id, protocol, host, port, verify_port, username_hint, mode, enabled, created_at, updated_at FROM remote_profiles ORDER BY device_id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, enabled, created_at, updated_at FROM remote_profiles ORDER BY device_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +130,7 @@ func (s *Store) ListRemoteProfiles(ctx context.Context) ([]RemoteProfile, error)
 func scanRemoteProfile(scanner interface{ Scan(...any) error }) (RemoteProfile, error) {
 	var item RemoteProfile
 	var enabled int
-	err := scanner.Scan(&item.ID, &item.DeviceID, &item.Protocol, &item.Host, &item.Port, &item.VerifyPort, &item.UsernameHint, &item.Mode, &enabled, &item.CreatedAt, &item.UpdatedAt)
+	err := scanner.Scan(&item.ID, &item.DeviceID, &item.Protocol, &item.Host, &item.Port, &item.VerifyPort, &item.UsernameHint, &item.DomainHint, &item.CertificatePolicy, &item.Mode, &enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RemoteProfile{}, ErrNotFound
 	}
@@ -146,14 +163,14 @@ func (s *Store) UpsertRemoteProfile(ctx context.Context, item RemoteProfile) (Re
 		}
 		item.CreatedAt = now
 		item.UpdatedAt = now
-		_, err = s.db.ExecContext(ctx, `INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, mode, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.DeviceID, item.Protocol, item.Host, item.Port, item.VerifyPort, item.UsernameHint, item.Mode, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+		_, err = s.db.ExecContext(ctx, `INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.DeviceID, item.Protocol, item.Host, item.Port, item.VerifyPort, item.UsernameHint, item.DomainHint, item.CertificatePolicy, item.Mode, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
 	case err != nil:
 		return RemoteProfile{}, err
 	default:
 		item.ID = existing.ID
 		item.CreatedAt = existing.CreatedAt
 		item.UpdatedAt = now
-		_, err = s.db.ExecContext(ctx, `UPDATE remote_profiles SET protocol = ?, host = ?, port = ?, verify_port = ?, username_hint = ?, mode = ?, enabled = ?, updated_at = ? WHERE device_id = ?`, item.Protocol, item.Host, item.Port, item.VerifyPort, item.UsernameHint, item.Mode, boolInt(item.Enabled), item.UpdatedAt, item.DeviceID)
+		_, err = s.db.ExecContext(ctx, `UPDATE remote_profiles SET protocol = ?, host = ?, port = ?, verify_port = ?, username_hint = ?, domain_hint = ?, certificate_policy = ?, mode = ?, enabled = ?, updated_at = ? WHERE device_id = ?`, item.Protocol, item.Host, item.Port, item.VerifyPort, item.UsernameHint, item.DomainHint, item.CertificatePolicy, item.Mode, boolInt(item.Enabled), item.UpdatedAt, item.DeviceID)
 	}
 	if err != nil {
 		return RemoteProfile{}, normalizeDBError(err)

@@ -96,7 +96,7 @@ CREATE TABLE devices (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, mac_addres
 INSERT INTO devices VALUES ('device-old','windows','00:11:22:33:44:55','192.168.50.200','192.168.50.255',9,'','','desktop','windows','broadcast','',3389,'https://legacy.invalid/session','',1,'now','now');
 CREATE TABLE remote_profiles (id TEXT PRIMARY KEY, device_id TEXT NOT NULL, name TEXT NOT NULL, protocol TEXT NOT NULL, host TEXT NOT NULL, port INTEGER NOT NULL, verify_port INTEGER NOT NULL DEFAULT 0, username_hint TEXT NOT NULL DEFAULT '', domain TEXT NOT NULL DEFAULT '', credential_mode TEXT NOT NULL DEFAULT 'prompt', enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX remote_profiles_device_idx ON remote_profiles(device_id);
-INSERT INTO remote_profiles VALUES ('remote-old','device-old','Windows desktop','rdp','192.168.50.200',3389,3389,'','','prompt',1,'now','now');
+INSERT INTO remote_profiles VALUES ('remote-old','device-old','Windows desktop','rdp','192.168.50.200',3389,3389,'','WORKGROUP','prompt',1,'now','now');
 `)
 	if err != nil {
 		db.Close()
@@ -119,7 +119,7 @@ INSERT INTO remote_profiles VALUES ('remote-old','device-old','Windows desktop',
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Mode != "browser-local" || profile.Protocol != "rdp" || profile.Host != "192.168.50.200" || profile.Port != 3389 {
+	if profile.Mode != "browser-local" || profile.Protocol != "rdp" || profile.Host != "192.168.50.200" || profile.Port != 3389 || profile.DomainHint != "WORKGROUP" || profile.CertificatePolicy != "strict" {
 		t.Fatalf("migrated profile = %+v", profile)
 	}
 	if _, err := repository.UpsertRemoteProfile(t.Context(), profile); err != nil {
@@ -187,7 +187,7 @@ func TestPortableExportImportsRelayReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Version != 3 || len(data.Devices) != 1 || len(data.WakeRelays) != 1 || len(data.RemoteProfiles) != 1 {
+	if data.Version != 4 || len(data.Devices) != 1 || len(data.WakeRelays) != 1 || len(data.RemoteProfiles) != 1 {
 		t.Fatalf("unexpected export: %+v", data)
 	}
 
@@ -230,11 +230,11 @@ func TestRemoteProfileCRUDValidationAndDeviceCleanup(t *testing.T) {
 	if err == nil {
 		t.Fatalf("non-canonical IPv4 should not be accepted: %+v", created)
 	}
-	created, err = repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: " RDP ", UsernameHint: "DOMAIN\\user", Enabled: true})
+	created, err = repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: " RDP ", UsernameHint: "DOMAIN\\user", DomainHint: "WORK", CertificatePolicy: "trust-local", Enabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Protocol != "rdp" || created.Host != device.IPAddress || created.Port != 3389 || created.VerifyPort != 3389 || created.Mode != "browser-local" {
+	if created.Protocol != "rdp" || created.Host != device.IPAddress || created.Port != 3389 || created.VerifyPort != 3389 || created.Mode != "browser-local" || created.DomainHint != "WORK" || created.CertificatePolicy != "trust-local" {
 		t.Fatalf("profile defaults were not normalized: %+v", created)
 	}
 	updated, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "vnc", Host: "10.0.0.8", Port: 5901, Mode: "browser-local", Enabled: true})
@@ -259,6 +259,9 @@ func TestRemoteProfileCRUDValidationAndDeviceCleanup(t *testing.T) {
 	}
 	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "https", Host: "desktop.local", Enabled: true}); err == nil {
 		t.Fatal("web URL protocol must be rejected")
+	}
+	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, CertificatePolicy: "ignore-all", Enabled: true}); err == nil {
+		t.Fatal("unknown certificate policy must be rejected")
 	}
 	if err := repository.DeleteDevice(t.Context(), device.ID); err != nil {
 		t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/aklkbqx/wol/internal/buildinfo"
 	"github.com/aklkbqx/wol/internal/presence"
@@ -33,13 +34,25 @@ type wakeDataMsg struct {
 }
 
 type wakeResultMsg struct {
-	result wakeservice.Result
-	err    error
+	operationID uint64
+	targetID    string
+	targetName  string
+	result      wakeservice.Result
+	err         error
+}
+
+type wakeVerifyMsg struct {
+	operationID uint64
+	targetID    string
+	targetName  string
+	status      string
 }
 
 type remoteResultMsg struct {
-	deviceName string
-	err        error
+	operationID uint64
+	targetID    string
+	deviceName  string
+	err         error
 }
 
 type probeResultMsg struct {
@@ -103,6 +116,7 @@ type wakeForm struct {
 	values   []string
 	selected int
 	error    string
+	saving   bool
 }
 
 // WakeModel is the standalone Wake Desk. It opens SQLite directly and never
@@ -138,6 +152,7 @@ type WakeModel struct {
 	loadContext   context.Context
 	loadCancel    context.CancelFunc
 	checkedAt     time.Time
+	checkedDevice map[string]time.Time
 	stale         bool
 
 	loading        bool
@@ -155,6 +170,10 @@ type WakeModel struct {
 	actionPicker   bool
 	pickerSelected int
 	actionCancel   context.CancelFunc
+	actionContext  context.Context
+	actionID       uint64
+	actionTargetID string
+	actionTarget   string
 	frame          uint64
 }
 
@@ -168,22 +187,23 @@ func NewWakeModel(repository *store.Store, version, credit string) *WakeModel {
 		credit = buildinfo.Credit
 	}
 	return &WakeModel{
-		repository:   repository,
-		service:      wakeservice.NewService(repository, wakeservice.Hooks{}),
-		version:      version,
-		credit:       credit,
-		theme:        DetectTheme(),
-		motion:       NewMotion(MotionEnabled()),
-		width:        80,
-		height:       24,
-		presence:     make(map[string]string),
-		profiles:     make(map[string]store.RemoteProfile),
-		detector:     presence.NewDetector(),
-		status:       "Loading local inventory...",
-		loading:      true,
-		phase:        phaseBootLoading,
-		loadingKind:  loadingBoot,
-		loadingStage: stageInventory,
+		repository:    repository,
+		service:       wakeservice.NewService(repository, wakeservice.Hooks{}),
+		version:       version,
+		credit:        credit,
+		theme:         DetectTheme(),
+		motion:        NewMotion(MotionEnabled()),
+		width:         80,
+		height:        24,
+		presence:      make(map[string]string),
+		profiles:      make(map[string]store.RemoteProfile),
+		checkedDevice: make(map[string]time.Time),
+		detector:      presence.NewDetector(),
+		status:        "Loading local inventory...",
+		loading:       true,
+		phase:         phaseBootLoading,
+		loadingKind:   loadingBoot,
+		loadingStage:  stageInventory,
 	}
 }
 
@@ -285,27 +305,57 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("Checking power for %d machine(s)...", len(value.devices))
 		return m, m.startPresenceScan(value.devices, value.requestID, value.kind, m.loadContext)
 	case wakeResultMsg:
-		m.waking = false
-		m.actionCancel = nil
-		m.motion.Until = time.Time{}
-		if value.err != nil {
-			m.status = "Wake failed: " + value.err.Error()
-		} else {
-			m.status = fmt.Sprintf("Wake sent to %s via %s (%d packet(s)).", value.result.Device.Name, routeLabel(value.result.Route), value.result.Attempt.Packets)
+		if value.operationID != m.actionID || value.targetID != m.actionTargetID {
+			return m, nil
 		}
-		return m, m.beginRefresh(loadingRefresh)
+		if value.err == nil {
+			m.prependWakeAttempt(value.result.Attempt)
+			m.status = fmt.Sprintf("%s · packet sent via %s (%d). Waiting for power...", value.targetName, routeLabel(value.result.Route), value.result.Attempt.Packets)
+			m.action = "wake-wait"
+			return m, m.verifyWake(value.operationID, value.result.Device)
+		}
+		m.waking = false
+		m.prependWakeAttempt(value.result.Attempt)
+		m.finishAction()
+		m.motion.Until = time.Time{}
+		m.status = value.targetName + " · wake failed: " + value.err.Error()
+		return m, nil
+	case wakeVerifyMsg:
+		if value.operationID != m.actionID || value.targetID != m.actionTargetID {
+			return m, nil
+		}
+		m.waking = false
+		m.finishAction()
+		m.motion.Until = time.Time{}
+		m.ensurePresence()
+		if value.status == "online" {
+			m.presence[value.targetID] = "online"
+			m.ensureCheckedDevice()
+			m.checkedDevice[value.targetID] = time.Now()
+			m.status = value.targetName + " · ONLINE after wake."
+		} else {
+			m.status = value.targetName + " · packet sent, but the machine is not online yet. Press s to check again."
+		}
+		return m, nil
 	case remoteResultMsg:
+		if value.operationID != m.actionID || value.targetID != m.actionTargetID {
+			return m, nil
+		}
 		m.opening = false
-		m.actionCancel = nil
+		m.finishAction()
 		m.motion.Until = time.Time{}
 		if value.err != nil {
 			if errors.Is(value.err, context.Canceled) {
-				m.status = "Wake & Remote cancelled."
+				m.status = value.deviceName + " · Wake & Remote cancelled."
 			} else {
-				m.status = "Wake & Remote failed: " + value.err.Error()
+				m.status = value.deviceName + " · Wake & Remote failed: " + value.err.Error()
 			}
 		} else {
-			m.status = "Local remote ready for " + value.deviceName + "."
+			m.ensurePresence()
+			m.presence[value.targetID] = "online"
+			m.ensureCheckedDevice()
+			m.checkedDevice[value.targetID] = time.Now()
+			m.status = value.deviceName + " · local sign-in opened. Credentials stay in memory only."
 		}
 		return m, nil
 	case probeResultMsg:
@@ -322,9 +372,11 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.ensurePresence()
 			m.presence[value.deviceID] = value.status
-			m.checkedAt = time.Now()
-			m.stale = false
-			m.status = "Status updated: " + strings.ToUpper(value.status) + "."
+			if m.checkedDevice == nil {
+				m.checkedDevice = make(map[string]time.Time)
+			}
+			m.checkedDevice[value.deviceID] = time.Now()
+			m.status = m.deviceName(value.deviceID) + " · power " + strings.ToUpper(value.status) + "."
 		}
 		return m, nil
 	case probeBatchMsg:
@@ -345,6 +397,7 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case formSavedMsg:
 		if value.keep && m.form != nil {
 			m.form.error = value.message
+			m.form.saving = false
 		} else {
 			m.form = nil
 		}
@@ -453,14 +506,20 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.form != nil {
 		return m.handleFormKey(keyName)
 	}
+	if (m.waking || m.opening) && (keyName == "q" || keyName == "ctrl+c") {
+		if m.actionCancel != nil {
+			m.actionCancel()
+		}
+		m.finishLoadContext()
+		return tea.Quit
+	}
 	if m.actionPicker {
 		return m.handleActionPicker(keyName)
 	}
 	if keyName == "esc" && (m.waking || m.opening) {
-		if m.actionCancel != nil {
-			m.actionCancel()
-		}
-		m.status = "Cancelling the current action..."
+		target := m.actionTarget
+		m.cancelAction()
+		m.status = target + " · action cancelled."
 		return nil
 	}
 	if m.confirm != "" {
@@ -490,15 +549,23 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.filtering = false
 			m.filterInput = ""
 		case "backspace":
-			if len(m.filterInput) > 0 {
-				m.filterInput = m.filterInput[:len(m.filterInput)-1]
+			runes := []rune(m.filterInput)
+			if len(runes) > 0 {
+				m.filterInput = string(runes[:len(runes)-1])
 			}
 		default:
-			if len([]rune(keyName)) == 1 && keyName >= " " && keyName <= "~" {
+			if runes := []rune(keyName); len(runes) == 1 && unicode.IsPrint(runes[0]) {
 				m.filterInput += keyName
 			}
 		}
 		return nil
+	}
+	if m.waking || m.opening {
+		switch keyName {
+		case "enter", "w", "c", "f", "s", "r", "a", "e", "p", "d", "/":
+			m.status = m.actionTarget + " · action is still running. Press Esc to cancel."
+			return nil
+		}
 	}
 
 	switch keyName {
@@ -637,18 +704,21 @@ func (m *WakeModel) beginWake(force bool) tea.Cmd {
 		return nil
 	}
 	device := devices[m.selected]
+	m.actionID++
+	operationID := m.actionID
+	m.actionTargetID, m.actionTarget = device.ID, device.Name
 	m.waking = true
 	m.action = "wake"
 	m.status = fmt.Sprintf("Sending wake packet to %s...", device.Name)
 	m.motion.Trigger(time.Now(), 1200*time.Millisecond)
 	ctx, cancel := context.WithCancel(context.Background())
+	m.actionContext = ctx
 	m.actionCancel = cancel
 	wakeCmd := func() tea.Msg {
-		defer cancel()
 		timedCtx, timeoutCancel := context.WithTimeout(ctx, 35*time.Second)
 		defer timeoutCancel()
 		result, err := m.service.WakeDevice(timedCtx, device.ID, wakeservice.Options{Force: force, Repeat: 3, Interval: 200 * time.Millisecond, Verify: false})
-		return wakeResultMsg{result: result, err: err}
+		return wakeResultMsg{operationID: operationID, targetID: device.ID, targetName: device.Name, result: result, err: err}
 	}
 	return tea.Batch(wakeCmd, m.motionTick())
 }
@@ -678,22 +748,125 @@ func (m *WakeModel) beginWakeAndRemote() tea.Cmd {
 		return nil
 	}
 	m.opening = true
+	m.actionID++
+	operationID := m.actionID
+	m.actionTargetID, m.actionTarget = device.ID, device.Name
 	m.action = "wake-remote"
 	m.status = "Wake & Remote: WAKE → WAIT → LOCAL. Press Esc to cancel."
 	m.motion.Trigger(time.Now(), 30*time.Minute)
 	ctx, cancel := context.WithCancel(context.Background())
+	m.actionContext = ctx
 	m.actionCancel = cancel
 	openCmd := func() tea.Msg {
 		defer cancel()
 		err := m.wakeAndRemote(ctx, device, profile)
-		return remoteResultMsg{deviceName: device.Name, err: err}
+		return remoteResultMsg{operationID: operationID, targetID: device.ID, deviceName: device.Name, err: err}
 	}
 	return tea.Batch(openCmd, m.motionTick())
+}
+
+func (m *WakeModel) finishAction() {
+	if m.actionCancel != nil {
+		m.actionCancel()
+	}
+	m.actionCancel = nil
+	m.actionContext = nil
+	m.actionTargetID = ""
+	m.actionTarget = ""
+	m.action = ""
+}
+
+func (m *WakeModel) cancelAction() {
+	m.actionID++
+	m.waking = false
+	m.opening = false
+	m.motion.Until = time.Time{}
+	m.finishAction()
+}
+
+func (m *WakeModel) verifyWake(operationID uint64, device store.Device) tea.Cmd {
+	targetID, targetName := device.ID, device.Name
+	parent := m.actionContext
+	if parent == nil {
+		parent = context.Background()
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, 90*time.Second)
+		defer cancel()
+		port := device.VerifyPort
+		if profile, ok := m.profiles[device.ID]; port == 0 && ok {
+			port = profile.VerifyPort
+		}
+		delays := []time.Duration{0, time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second, 8 * time.Second, 10 * time.Second}
+		for attempt := 0; ; attempt++ {
+			delay := delays[min(attempt, len(delays)-1)]
+			if delay > 0 {
+				select {
+				case <-ctx.Done():
+					return wakeVerifyMsg{operationID: operationID, targetID: targetID, targetName: targetName, status: "timeout"}
+				case <-time.After(delay):
+				}
+			}
+			result := m.presenceDetector().Probe(ctx, presence.Target{DeviceID: targetID, IPAddress: device.IPAddress, VerifyPort: port}, 1500*time.Millisecond)
+			if result.Status == presence.StatusOnline {
+				return wakeVerifyMsg{operationID: operationID, targetID: targetID, targetName: targetName, status: "online"}
+			}
+			if ctx.Err() != nil {
+				return wakeVerifyMsg{operationID: operationID, targetID: targetID, targetName: targetName, status: "timeout"}
+			}
+		}
+	}
+}
+
+func (m *WakeModel) deviceName(deviceID string) string {
+	for _, device := range m.devices {
+		if device.ID == deviceID {
+			return device.Name
+		}
+	}
+	return "Machine"
+}
+
+func (m *WakeModel) prependWakeAttempt(attempt store.WakeAttempt) {
+	if attempt.ID == "" {
+		return
+	}
+	for _, existing := range m.history {
+		if existing.ID == attempt.ID {
+			return
+		}
+	}
+	m.history = append([]store.WakeAttempt{attempt}, m.history...)
+	if len(m.history) > 80 {
+		m.history = m.history[:80]
+	}
+}
+
+func (m *WakeModel) actionDevice() (store.Device, bool) {
+	if m.actionTargetID == "" {
+		devices := m.filteredDevices()
+		if (m.waking || m.opening) && len(devices) > 0 {
+			return devices[min(m.selected, len(devices)-1)], true
+		}
+		return store.Device{}, false
+	}
+	for _, device := range m.devices {
+		if device.ID == m.actionTargetID {
+			return device, true
+		}
+	}
+	return store.Device{}, false
 }
 
 func (m *WakeModel) ensurePresence() {
 	if m.presence == nil {
 		m.presence = make(map[string]string)
+	}
+}
+
+func (m *WakeModel) ensureCheckedDevice() {
+	if m.checkedDevice == nil {
+		m.checkedDevice = make(map[string]time.Time)
 	}
 }
 
@@ -755,8 +928,8 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 		return nil
 	}
 	port := device.VerifyPort
-	if port == 0 {
-		port = 3389
+	if profile, ok := m.profiles[device.ID]; port == 0 && ok {
+		port = profile.VerifyPort
 	}
 	if m.loadCancel != nil {
 		m.loadCancel()
@@ -766,7 +939,11 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 	m.loading = true
 	m.loadingStage = stagePresence
 	m.loadingTarget = device.Name
-	m.status = fmt.Sprintf("Checking power at %s:%d...", device.IPAddress, port)
+	if port > 0 {
+		m.status = fmt.Sprintf("Checking power at %s:%d...", device.IPAddress, port)
+	} else {
+		m.status = fmt.Sprintf("Checking power for %s with automatic local probes...", device.IPAddress)
+	}
 	detector := m.presenceDetector()
 	m.checking = true
 	m.motion.Trigger(time.Now(), 30*time.Minute)
@@ -835,13 +1012,13 @@ func (m *WakeModel) beginRemoteProfile() {
 		if strings.EqualFold(device.Platform, "windows") {
 			protocol, port = "rdp", 3389
 		}
-		profile = store.RemoteProfile{DeviceID: device.ID, Protocol: protocol, Host: device.IPAddress, Port: port, VerifyPort: port, Mode: "browser-local", Enabled: true}
+		profile = store.RemoteProfile{DeviceID: device.ID, Protocol: protocol, Host: device.IPAddress, Port: port, VerifyPort: port, CertificatePolicy: "strict", Mode: "browser-local", Enabled: true}
 	}
 	m.form = &wakeForm{
 		kind:   remoteProfileForm,
 		id:     device.ID,
 		labels: remoteProfileFormLabels(),
-		values: []string{profile.Protocol, profile.Host, strconv.Itoa(profile.Port), strconv.Itoa(profile.VerifyPort), profile.UsernameHint},
+		values: []string{profile.Protocol, profile.Host, strconv.Itoa(profile.Port), strconv.Itoa(profile.VerifyPort), profile.UsernameHint, profile.DomainHint, profile.CertificatePolicy},
 	}
 	m.status = "Local remote profile: no password is stored."
 }
@@ -904,19 +1081,23 @@ func (m *WakeModel) handleFormKey(name string) tea.Cmd {
 		return nil
 	}
 	if name == "backspace" {
-		if len(form.values[form.selected]) > 0 {
-			form.values[form.selected] = form.values[form.selected][:len(form.values[form.selected])-1]
+		runes := []rune(form.values[form.selected])
+		if len(runes) > 0 {
+			form.values[form.selected] = string(runes[:len(runes)-1])
 		}
 		return nil
 	}
 	if name == "enter" {
+		if form.saving {
+			return nil
+		}
 		if form.selected < len(form.labels)-1 {
 			form.selected++
 			return nil
 		}
 		return m.saveForm()
 	}
-	if len([]rune(name)) == 1 && name >= " " && name <= "~" {
+	if runes := []rune(name); len(runes) == 1 && unicode.IsPrint(runes[0]) {
 		form.values[form.selected] += name
 		form.error = ""
 	}
@@ -924,6 +1105,10 @@ func (m *WakeModel) handleFormKey(name string) tea.Cmd {
 }
 
 func (m *WakeModel) saveForm() tea.Cmd {
+	if m.form == nil || m.form.saving {
+		return nil
+	}
+	m.form.saving = true
 	form := *m.form
 	values := append([]string(nil), form.values...)
 	return func() tea.Msg {
@@ -955,7 +1140,7 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			if err != nil {
 				return formSavedMsg{message: "Profile save failed: verify port must be between 1 and 65535.", keep: true}
 			}
-			profile := store.RemoteProfile{DeviceID: form.id, Protocol: strings.ToLower(strings.TrimSpace(values[0])), Host: strings.TrimSpace(values[1]), Port: port, VerifyPort: verifyPort, UsernameHint: strings.TrimSpace(values[4]), Mode: "browser-local", Enabled: true}
+			profile := store.RemoteProfile{DeviceID: form.id, Protocol: strings.ToLower(strings.TrimSpace(values[0])), Host: strings.TrimSpace(values[1]), Port: port, VerifyPort: verifyPort, UsernameHint: strings.TrimSpace(values[4]), DomainHint: strings.TrimSpace(values[5]), CertificatePolicy: strings.ToLower(strings.TrimSpace(values[6])), Mode: "browser-local", Enabled: true}
 			if err := validateRemoteProfile(profile); err != nil {
 				return formSavedMsg{message: "Profile save failed: " + err.Error() + ".", keep: true}
 			}
@@ -1026,7 +1211,7 @@ func relayFormLabels() []string {
 }
 
 func remoteProfileFormLabels() []string {
-	return []string{"Protocol", "Host", "Port", "Verify port", "Username hint"}
+	return []string{"Protocol", "Host", "Port", "Verify port", "Username hint", "RDP domain", "Certificate (strict/trust-local)"}
 }
 
 func validateRemoteProfile(profile store.RemoteProfile) error {
@@ -1046,6 +1231,13 @@ func validateRemoteProfile(profile store.RemoteProfile) error {
 	}
 	if strings.ToLower(strings.TrimSpace(profile.Mode)) != "browser-local" {
 		return errors.New("mode must be browser-local")
+	}
+	policy := strings.ToLower(strings.TrimSpace(profile.CertificatePolicy))
+	if policy == "" {
+		policy = "strict"
+	}
+	if policy != "strict" && policy != "trust-local" {
+		return errors.New("certificate must be strict or trust-local")
 	}
 	return nil
 }
@@ -1302,8 +1494,8 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 	}
 	if mode == LayoutCompact || m.height < 34 {
 		fleet := m.renderMachineList(devices, width)
-		if len(devices) > 0 && (m.waking || m.opening || m.motion.Active(time.Now())) {
-			return fleet + "\n" + m.renderSignalPath(devices[min(m.selected, len(devices)-1)], width)
+		if target, ok := m.actionDevice(); ok && (m.waking || m.opening) {
+			return fleet + "\n" + wakePanel(m.theme, "ACTIVE", target.Name, m.renderSignalPath(target, max(1, width-4))+"\n"+m.theme.muted().Render("Esc cancels this target-bound action."), width)
 		}
 		return fleet
 	}
@@ -1319,6 +1511,15 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 		fitText(fmt.Sprintf("POWER  %d online · %d offline · %d unknown%s%s", online, offline, unknown, summaryCount("checking", checking), summaryCount("disabled", disabled)), rowWidth),
 		fitText(fmt.Sprintf("WAKE   %d ready · %d blocked", ready, blocked), rowWidth),
 		fitText(fmt.Sprintf("REMOTE %d configured · %d setup required", remoteConfigured, remoteSetup), rowWidth),
+	}
+	if m.waking || m.opening {
+		kind := "WAKE"
+		if m.opening {
+			kind = "WAKE + LOCAL REMOTE"
+		} else if m.action == "wake-wait" {
+			kind = "WAITING FOR POWER"
+		}
+		rows = append(rows, m.theme.accent().Render(fitText("ACTIVE "+kind+" · "+m.actionTarget, rowWidth)))
 	}
 	if len(devices) == 0 {
 		rows = append(rows, "No machines yet. Press a to add one.")
@@ -1425,10 +1626,14 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 		fitText("IP     "+device.IPAddress, rowWidth),
 		fitText("MAC    "+device.MACAddress, rowWidth),
 		fitText("PATH   "+m.routeText(device), rowWidth),
-		fitText("CHECK  "+verifyText(device), rowWidth),
+		fitText("CHECK  "+m.verifyText(device), rowWidth),
 	}
-	if m.waking || m.opening || m.motion.Active(time.Now()) {
-		lines = append(lines[:5], append([]string{m.renderSignalPath(device, rowWidth), ""}, lines[5:]...)...)
+	if target, ok := m.actionDevice(); ok && (m.waking || m.opening) {
+		operation := m.theme.accent().Render("ACTIVE FOR " + target.Name)
+		if target.ID != device.ID {
+			operation += m.theme.muted().Render(" · selection changed; action target did not")
+		}
+		lines = append(lines[:5], append([]string{fitText(operation, rowWidth), m.renderSignalPath(target, rowWidth), ""}, lines[5:]...)...)
 	}
 	return wakePanel(m.theme, "ACTION DECK", "selected machine", strings.Join(lines, "\n"), width)
 }
@@ -1675,13 +1880,16 @@ func (m *WakeModel) routeText(device store.Device) string {
 	return fmt.Sprintf("broadcast %s:%d", destination, port)
 }
 
-func verifyText(device store.Device) string {
+func (m *WakeModel) verifyText(device store.Device) string {
 	if strings.TrimSpace(device.IPAddress) == "" {
 		return "no IP address"
 	}
 	port := device.VerifyPort
+	if profile, ok := m.profiles[device.ID]; port == 0 && ok {
+		port = profile.VerifyPort
+	}
 	if port == 0 {
-		return net.JoinHostPort(device.IPAddress, "3389") + " (auto fallback)"
+		return device.IPAddress + " (automatic local probes)"
 	}
 	if port < 1 || port > 65535 {
 		return "invalid TCP port"
@@ -1783,7 +1991,14 @@ func stateStyle(theme Theme, state string) lipgloss.Style {
 
 func wakePanel(theme Theme, title, subtitle, body string, width int) string {
 	if width < 12 {
-		width = 12
+		lines := []string{title}
+		if body != "" {
+			lines = append(lines, strings.Split(body, "\n")...)
+		}
+		for index := range lines {
+			lines[index] = fitText(lines[index], max(1, width))
+		}
+		return strings.Join(lines, "\n")
 	}
 	inner := width - 2
 	header := theme.title().Render(title)

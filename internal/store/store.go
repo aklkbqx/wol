@@ -186,6 +186,8 @@ CREATE TABLE IF NOT EXISTS remote_profiles (
   port INTEGER NOT NULL,
   verify_port INTEGER NOT NULL,
   username_hint TEXT NOT NULL DEFAULT '',
+  domain_hint TEXT NOT NULL DEFAULT '',
+  certificate_policy TEXT NOT NULL DEFAULT 'strict',
   mode TEXT NOT NULL DEFAULT 'browser-local',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
@@ -213,6 +215,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		{table: "wake_relays", name: "transport", def: "TEXT NOT NULL DEFAULT 'ssh_etherwake'"},
 		{table: "wake_relays", name: "interface_name", def: "TEXT NOT NULL DEFAULT 'br-lan'"},
 		{table: "wake_relays", name: "ssh_user", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "remote_profiles", name: "domain_hint", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "remote_profiles", name: "certificate_policy", def: "TEXT NOT NULL DEFAULT 'strict'"},
 	} {
 		if err := s.ensureColumn(ctx, column.table, column.name, column.def); err != nil {
 			return err
@@ -276,8 +280,14 @@ func (s *Store) migrateRemoteProfiles(ctx context.Context) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if columns["mode"] && !columns["name"] && !columns["domain"] && !columns["credential_mode"] {
+	if columns["mode"] && columns["domain_hint"] && columns["certificate_policy"] && !columns["name"] && !columns["domain"] && !columns["credential_mode"] {
 		return nil
+	}
+	domainSource := "domain_hint"
+	if columns["domain"] {
+		domainSource = "domain"
+	} else if !columns["domain_hint"] {
+		domainSource = "''"
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -285,7 +295,7 @@ func (s *Store) migrateRemoteProfiles(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `
+	if _, err = tx.ExecContext(ctx, fmt.Sprintf(`
 DROP INDEX IF EXISTS remote_profiles_device_idx;
 ALTER TABLE remote_profiles RENAME TO remote_profiles_legacy_v032;
 CREATE TABLE remote_profiles (
@@ -296,20 +306,22 @@ CREATE TABLE remote_profiles (
   port INTEGER NOT NULL,
   verify_port INTEGER NOT NULL,
   username_hint TEXT NOT NULL DEFAULT '',
+  domain_hint TEXT NOT NULL DEFAULT '',
+  certificate_policy TEXT NOT NULL DEFAULT 'strict',
   mode TEXT NOT NULL DEFAULT 'browser-local',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
 );
-INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, mode, enabled, created_at, updated_at)
+INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, enabled, created_at, updated_at)
 SELECT id, device_id, protocol, host, port,
        CASE WHEN verify_port > 0 THEN verify_port ELSE port END,
-       username_hint, 'browser-local', enabled, created_at, updated_at
+       username_hint, %s, 'strict', 'browser-local', enabled, created_at, updated_at
 FROM remote_profiles_legacy_v032
 WHERE rowid IN (SELECT MAX(rowid) FROM remote_profiles_legacy_v032 GROUP BY device_id);
 DROP TABLE remote_profiles_legacy_v032;
-`); err != nil {
+`, domainSource)); err != nil {
 		return fmt.Errorf("migrate remote profiles: %w", err)
 	}
 	return tx.Commit()
@@ -715,14 +727,14 @@ func (s *Store) Export(ctx context.Context) (ExportData, error) {
 	if err != nil {
 		return ExportData{}, err
 	}
-	return ExportData{Version: 3, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays, RemoteProfiles: profiles}, nil
+	return ExportData{Version: 4, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays, RemoteProfiles: profiles}, nil
 }
 
 func (s *Store) Import(ctx context.Context, data ExportData) error {
 	if data.Version == 0 {
 		data.Version = 1
 	}
-	if data.Version != 1 && data.Version != 2 && data.Version != 3 {
+	if data.Version != 1 && data.Version != 2 && data.Version != 3 && data.Version != 4 {
 		return fmt.Errorf("unsupported export version %d", data.Version)
 	}
 	relayIDs := make(map[string]string, len(data.WakeRelays))

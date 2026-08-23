@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -71,7 +73,7 @@ func runRemote(arguments []string) int {
 		fmt.Fprintf(os.Stderr, "wake & remote %s: %v\n", device.Name, err)
 		return 3
 	}
-	fmt.Printf("Local remote ready for %s\n%s\nPress Ctrl+C to close the session.\n", device.Name, url)
+	fmt.Printf("Local sign-in opened for %s\n%s\nCredentials stay in memory only. Press Ctrl+C to close the session.\n", device.Name, url)
 	waitForRemoteStop(ctx)
 	return 0
 }
@@ -84,6 +86,8 @@ func runRemoteConfigure(arguments []string) int {
 	port := flags.Int("port", 0, "remote service port")
 	verifyPort := flags.Int("verify-port", 0, "power-check port (defaults to service port)")
 	username := flags.String("username", "", "optional username hint; passwords are never stored")
+	domain := flags.String("domain", "", "optional RDP domain hint")
+	certificate := flags.String("certificate", "strict", "RDP certificate policy: strict or trust-local")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -107,13 +111,14 @@ func runRemoteConfigure(arguments []string) int {
 	}
 	profile, err := repository.UpsertRemoteProfile(context.Background(), store.RemoteProfile{
 		DeviceID: device.ID, Protocol: *protocol, Host: *host, Port: *port,
-		VerifyPort: *verifyPort, UsernameHint: *username, Mode: "browser-local", Enabled: true,
+		VerifyPort: *verifyPort, UsernameHint: *username, DomainHint: *domain,
+		CertificatePolicy: *certificate, Mode: "browser-local", Enabled: true,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configure local remote for %s: %v\n", device.Name, err)
 		return 2
 	}
-	fmt.Printf("Configured localhost remote for %s (%s %s:%d).\n", device.Name, profile.Protocol, profile.Host, profile.Port)
+	fmt.Printf("Configured localhost remote for %s (%s %s:%d, certificate %s).\n", device.Name, profile.Protocol, profile.Host, profile.Port, profile.CertificatePolicy)
 	return 0
 }
 
@@ -141,8 +146,13 @@ func runRemoteClear(arguments []string) int {
 }
 
 func runRemoteDoctor(arguments []string) int {
-	if len(arguments) != 0 {
-		fmt.Fprintln(os.Stderr, "usage: wol remote doctor")
+	flags := flagSet("remote doctor")
+	databasePath := flags.String("db", envString("WOL_DB", store.DefaultDatabasePath()), "SQLite database path")
+	if err := flags.Parse(arguments); err != nil {
+		return 2
+	}
+	if flags.NArg() > 1 {
+		fmt.Fprintln(os.Stderr, "usage: wol remote doctor [--db path] [machine]")
 		return 2
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -157,10 +167,47 @@ func runRemoteDoctor(arguments []string) int {
 	for _, problem := range report.Problems {
 		fmt.Println("- " + problem)
 	}
-	if !report.Ready() {
+	targetReady := true
+	if flags.NArg() == 1 {
+		repository, device, code := remoteDevice(*databasePath, flags.Arg(0))
+		if code != 0 {
+			return code
+		}
+		defer repository.Close()
+		targetCtx, targetCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer targetCancel()
+		profile, profileErr := repository.GetRemoteProfile(targetCtx, device.ID)
+		if profileErr != nil {
+			fmt.Printf("Target %s: PROFILE MISSING\n", device.Name)
+			targetReady = false
+		} else {
+			connection, dialErr := (&net.Dialer{}).DialContext(targetCtx, "tcp", net.JoinHostPort(profile.Host, strconv.Itoa(profile.VerifyPort)))
+			if connection != nil {
+				_ = connection.Close()
+			}
+			state := "REACHABLE"
+			if dialErr != nil {
+				state = "OFFLINE"
+				targetReady = false
+			}
+			fmt.Printf("Target %s: %s %s · certificate %s · %s\n", device.Name, strings.ToUpper(profile.Protocol), state, profile.CertificatePolicy, credentialPrompt(profile.Protocol))
+		}
+	}
+	if !report.Ready() || !targetReady {
 		return 1
 	}
 	return 0
+}
+
+func credentialPrompt(protocol string) string {
+	switch protocol {
+	case "rdp":
+		return "browser prompts for username/domain/password"
+	case "ssh":
+		return "browser prompts for username/password"
+	default:
+		return "browser prompts for password"
+	}
 }
 
 func runRemoteSetup(arguments []string) int {
@@ -183,7 +230,7 @@ func printRemoteUsage() {
 	fmt.Fprintln(os.Stderr, "usage: wol remote [--no-wake] <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote configure [options] <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote clear <machine>")
-	fmt.Fprintln(os.Stderr, "       wol remote doctor | setup")
+	fmt.Fprintln(os.Stderr, "       wol remote doctor [machine] | setup")
 }
 
 func defaultRemotePort(protocol string) int {
