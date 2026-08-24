@@ -234,10 +234,14 @@ func newBroker(expectedHost, oneTimeToken, cookieToken string, cfg Config, key [
 
 func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w, b.expectedHost)
-	if r.Host != b.expectedHost || !validOrigin(r, b.expectedHost) {
+	if !validLocalRequest(r, b.expectedHost) {
 		http.Error(w, "Invalid local session origin.", http.StatusForbidden)
 		return
 	}
+	// localhost and 127.0.0.1 are equivalent loopback names. Build the CSP
+	// around the exact host representation the browser used so Guacamole's
+	// WebSocket remains same-origin after browser canonicalization.
+	setSecurityHeaders(w, r.Host)
 	if strings.HasPrefix(r.URL.Path, "/s/") {
 		b.consume(w, r)
 		return
@@ -351,9 +355,34 @@ func (b *brokerHandler) validCookie(r *http.Request) bool {
 	return err == nil && len(cookie.Value) == len(b.cookieToken) && subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(b.cookieToken)) == 1
 }
 
-func validOrigin(r *http.Request, host string) bool {
-	origin := r.Header.Get("Origin")
-	return origin == "" || origin == "http://"+host
+func validLocalRequest(r *http.Request, expectedHost string) bool {
+	_, expectedPort, err := net.SplitHostPort(expectedHost)
+	if err != nil {
+		return false
+	}
+	requestHost, requestPort, err := net.SplitHostPort(r.Host)
+	if err != nil || requestPort != expectedPort || !isLoopbackName(requestHost) {
+		return false
+	}
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return false
+	}
+	originHost, originPort, err := net.SplitHostPort(parsed.Host)
+	return err == nil && originPort == expectedPort && isLoopbackName(originHost)
+}
+
+func isLoopbackName(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func setSecurityHeaders(w http.ResponseWriter, host string) {
