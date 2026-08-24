@@ -201,7 +201,7 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	server.Listener = listener
 	host := listener.Addr().String()
-	server.Config.Handler = newBroker(host, "once", "cookie", Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389, UsernameHint: "desktop-user", CertificatePolicy: "strict"}, []byte("0123456789abcdef"), upstreamURL)
+	server.Config.Handler = newBroker(host, "once", "cookie", "csrf", Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389, UsernameHint: "desktop-user", CertificatePolicy: "strict"}, []byte("0123456789abcdef"), upstreamURL)
 	server.Start()
 	defer server.Close()
 
@@ -234,7 +234,7 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "WOL LOCAL REMOTE") || !strings.Contains(string(body), "desktop-user") || strings.Contains(string(body), "/guacamole/?data=") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "WOL LOCAL REMOTE") || !strings.Contains(string(body), "desktop-user") || !strings.Contains(string(body), `name="csrf" value="csrf"`) || strings.Contains(string(body), "/guacamole/?data=") {
 		t.Fatalf("page status/body = %d %q", response.StatusCode, body)
 	}
 
@@ -253,7 +253,7 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("username=desktop-user&domain=WORK&password=session-only"))
+	req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("csrf=csrf&username=desktop-user&domain=WORK&password=session-only"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://"+host)
 	req.AddCookie(cookie)
@@ -310,22 +310,35 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 		_ = response.Body.Close()
 	}
 
-	for _, invalidOrigin := range []string{"", "null", "https://evil.test", "http://192.168.1.2:" + brokerPort} {
-		req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("username=desktop-user&password=secret"))
+	for _, browserOrigin := range []string{"", "null", "https://example.test", "http://192.168.1.2:" + brokerPort} {
+		req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("csrf=csrf&username=desktop-user&password=secret"))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		if invalidOrigin != "" {
-			req.Header.Set("Origin", invalidOrigin)
+		if browserOrigin != "" {
+			req.Header.Set("Origin", browserOrigin)
 		}
 		req.AddCookie(cookie)
 		response, err = client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if response.StatusCode != http.StatusForbidden {
-			t.Fatalf("unsafe sign-in origin %q status = %d", invalidOrigin, response.StatusCode)
+		if response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("browser sign-in origin %q status = %d", browserOrigin, response.StatusCode)
 		}
 		_ = response.Body.Close()
 	}
+
+	req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("csrf=wrong&username=desktop-user&password=secret"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://example.test")
+	req.AddCookie(cookie)
+	response, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("invalid CSRF token status = %d", response.StatusCode)
+	}
+	_ = response.Body.Close()
 
 	response, _ = client.Get(server.URL + "/session")
 	if response.StatusCode != http.StatusUnauthorized {
