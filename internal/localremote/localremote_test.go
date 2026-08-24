@@ -238,6 +238,21 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 		t.Fatalf("page status/body = %d %q", response.StatusCode, body)
 	}
 
+	_, brokerPort, _ := net.SplitHostPort(host)
+	localhostHost := net.JoinHostPort("localhost", brokerPort)
+	req, _ = http.NewRequest(http.MethodGet, server.URL+"/session", nil)
+	req.Host = localhostHost
+	req.Header.Set("Origin", "http://"+localhostHost)
+	req.AddCookie(cookie)
+	response, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(response.Header.Get("Content-Security-Policy"), "ws://"+localhostHost) {
+		t.Fatalf("localhost alias status/CSP = %d %q", response.StatusCode, response.Header.Get("Content-Security-Policy"))
+	}
+	_ = response.Body.Close()
+
 	req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("username=desktop-user&domain=WORK&password=session-only"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://"+host)
@@ -265,7 +280,9 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 
 	for _, mutate := range []func(*http.Request){
 		func(r *http.Request) { r.Host = "evil.test" },
+		func(r *http.Request) { r.Host = net.JoinHostPort("127.0.0.1", "1") },
 		func(r *http.Request) { r.Header.Set("Origin", "https://evil.test") },
+		func(r *http.Request) { r.Header.Set("Origin", "http://192.168.1.2:"+brokerPort) },
 	} {
 		req, _ = http.NewRequest(http.MethodGet, server.URL+"/session", nil)
 		req.AddCookie(cookie)
