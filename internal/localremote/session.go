@@ -110,8 +110,15 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 		defer cancel()
 		return nil, joinErrors(err, docker.close(cleanupCtx))
 	}
+	formToken, err := randomHex(32)
+	if err != nil {
+		_ = listener.Close()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return nil, joinErrors(err, docker.close(cleanupCtx))
+	}
 	upstream, _ := url.Parse(upstreamURL)
-	broker := newBroker(expectedHost, oneTimeToken, cookieToken, cfg, key, upstream)
+	broker := newBroker(expectedHost, oneTimeToken, cookieToken, formToken, cfg, key, upstream)
 	server := &http.Server{
 		Handler:           broker,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -193,6 +200,7 @@ type brokerHandler struct {
 	expectedHost string
 	oneTimeToken string
 	cookieToken  string
+	formToken    string
 	config       Config
 	key          []byte
 	launchToken  string
@@ -201,7 +209,7 @@ type brokerHandler struct {
 	consumed     bool
 }
 
-func newBroker(expectedHost, oneTimeToken, cookieToken string, cfg Config, key []byte, upstream *url.URL) http.Handler {
+func newBroker(expectedHost, oneTimeToken, cookieToken, formToken string, cfg Config, key []byte, upstream *url.URL) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
@@ -229,7 +237,7 @@ func newBroker(expectedHost, oneTimeToken, cookieToken string, cfg Config, key [
 		}
 		return nil
 	}
-	return &brokerHandler{expectedHost: expectedHost, oneTimeToken: oneTimeToken, cookieToken: cookieToken, config: cfg, key: append([]byte(nil), key...), proxy: proxy}
+	return &brokerHandler{expectedHost: expectedHost, oneTimeToken: oneTimeToken, cookieToken: cookieToken, formToken: formToken, config: cfg, key: append([]byte(nil), key...), proxy: proxy}
 }
 
 func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -252,12 +260,8 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path == "/session":
-		serveLoginPage(w, b.config, "")
+		serveLoginPage(w, b.config, b.formToken, "")
 	case r.URL.Path == "/connect":
-		if !validLocalOrigin(r, b.expectedHost) {
-			http.Error(w, "Invalid local sign-in origin.", http.StatusForbidden)
-			return
-		}
 		b.connect(w, r)
 	case r.URL.Path == "/remote":
 		b.remote(w, r)
@@ -278,7 +282,12 @@ func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
 	if err := r.ParseForm(); err != nil {
-		serveLoginPage(w, b.config, "Could not read the credentials. Please try again.")
+		serveLoginPage(w, b.config, b.formToken, "Could not read the credentials. Please try again.")
+		return
+	}
+	presentedToken := r.Form.Get("csrf")
+	if len(presentedToken) != len(b.formToken) || subtle.ConstantTimeCompare([]byte(presentedToken), []byte(b.formToken)) != 1 {
+		http.Error(w, "Invalid local sign-in token.", http.StatusForbidden)
 		return
 	}
 	credentials := Credentials{
@@ -287,7 +296,7 @@ func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
 		Password: r.Form.Get("password"),
 	}
 	if err := validateCredentials(b.config.Protocol, credentials); err != nil {
-		serveLoginPage(w, b.config, err.Error())
+		serveLoginPage(w, b.config, b.formToken, err.Error())
 		return
 	}
 	launchToken, err := buildAuthToken(b.key, b.config, credentials, time.Now())
@@ -366,20 +375,6 @@ func validLocalHost(requestHost, expectedHost string) bool {
 	}
 	host, requestPort, err := net.SplitHostPort(requestHost)
 	return err == nil && requestPort == expectedPort && isLoopbackName(host)
-}
-
-func validLocalOrigin(r *http.Request, expectedHost string) bool {
-	if !validLocalHost(r.Host, expectedHost) {
-		return false
-	}
-	_, expectedPort, _ := net.SplitHostPort(expectedHost)
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Scheme != "http" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	originHost, originPort, err := net.SplitHostPort(parsed.Host)
-	return err == nil && originPort == expectedPort && isLoopbackName(originHost)
 }
 
 func isLoopbackName(host string) bool {
