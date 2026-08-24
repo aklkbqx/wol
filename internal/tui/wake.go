@@ -562,8 +562,8 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	if m.waking || m.opening {
 		switch keyName {
-		case "enter", "w", "c", "f", "s", "r", "a", "e", "p", "d", "/":
-			m.status = m.actionTarget + " · action is still running. Press Esc to cancel."
+		case "tab", "1", "2", "3", "m", "h", "j", "k", "up", "down", "enter", "w", "c", "f", "s", "r", "a", "e", "p", "d", "/":
+			m.status = m.actionTarget + " · action in progress; selection is locked. Press Esc to cancel."
 			return nil
 		}
 	}
@@ -1530,15 +1530,19 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 		}
 		for i, device := range visible {
 			globalIndex := start + i
+			highlighted := globalIndex == m.selected
+			if (m.waking || m.opening) && m.actionTargetID != "" {
+				highlighted = device.ID == m.actionTargetID
+			}
 			marker := " "
-			if globalIndex == m.selected {
+			if highlighted {
 				marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
 			}
 			power := m.deviceState(device)
 			wake := m.wakeCapability(device)
 			remote, _ := m.remoteCapability(device)
 			name := fitText(device.Name, max(1, rowWidth-2))
-			if globalIndex == m.selected {
+			if highlighted {
 				name = m.theme.accent().Render(name)
 			}
 			if width < 42 {
@@ -1605,6 +1609,10 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	if m.actionPicker {
 		return m.renderActionPicker(devices, width)
 	}
+	active := m.waking || m.opening
+	if target, ok := m.actionDevice(); active && ok {
+		device = target
+	}
 	rowWidth := max(1, width-4)
 	power := m.deviceState(device)
 	wake := m.wakeCapability(device)
@@ -1613,29 +1621,43 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	if power == "UNKNOWN" {
 		powerHint = "  · press s to check"
 	}
+	contextLabel := "SELECTED"
+	if active {
+		contextLabel = "ACTION TARGET · selection locked"
+	}
 	lines := []string{
-		m.theme.muted().Render("SELECTED"),
+		m.theme.muted().Render(contextLabel),
 		m.theme.title().Render(fitText(m.theme.Glyph("arrow")+" "+device.Name, rowWidth)),
 		fitText("POWER  "+statusBadge(m.theme, power)+powerHint, rowWidth),
 		fitText("WAKE   "+statusBadge(m.theme, wake.state)+"  ·  "+wake.detail, rowWidth),
 		fitText("REMOTE "+statusBadge(m.theme, remote)+"  ·  "+remoteDetail, rowWidth),
-		"",
-		m.theme.accent().Render(fitText("[Enter] Choose action", rowWidth)),
-		m.theme.muted().Render(fitText("w wake only · c wake & remote · s check · p setup", rowWidth)),
+	}
+	if active {
+		lines = append(lines,
+			m.theme.accent().Render(fitText("ACTIVE FOR "+device.Name, rowWidth)),
+			m.renderSignalPath(device, rowWidth),
+			"",
+			m.theme.accent().Render(fitText("[Esc] Cancel current action", rowWidth)),
+		)
+	} else {
+		lines = append(lines,
+			"",
+			m.theme.accent().Render(fitText("[Enter] Choose action", rowWidth)),
+			m.theme.muted().Render(fitText("w wake only · c wake & remote · s check · p setup", rowWidth)),
+		)
+	}
+	lines = append(lines,
 		"",
 		fitText("IP     "+device.IPAddress, rowWidth),
 		fitText("MAC    "+device.MACAddress, rowWidth),
 		fitText("PATH   "+m.routeText(device), rowWidth),
 		fitText("CHECK  "+m.verifyText(device), rowWidth),
+	)
+	subtitle := "selected machine"
+	if active {
+		subtitle = "pinned action target"
 	}
-	if target, ok := m.actionDevice(); ok && (m.waking || m.opening) {
-		operation := m.theme.accent().Render("ACTIVE FOR " + target.Name)
-		if target.ID != device.ID {
-			operation += m.theme.muted().Render(" · selection changed; action target did not")
-		}
-		lines = append(lines[:5], append([]string{fitText(operation, rowWidth), m.renderSignalPath(target, rowWidth), ""}, lines[5:]...)...)
-	}
-	return wakePanel(m.theme, "ACTION DECK", "selected machine", strings.Join(lines, "\n"), width)
+	return wakePanel(m.theme, "ACTION DECK", subtitle, strings.Join(lines, "\n"), width)
 }
 
 func (m *WakeModel) renderActionPicker(devices []store.Device, width int) string {
