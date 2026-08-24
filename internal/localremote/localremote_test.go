@@ -239,6 +239,9 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "WOL LOCAL REMOTE") || !strings.Contains(string(body), "desktop-user") || !strings.Contains(string(body), `name="csrf" value="csrf"`) || strings.Contains(string(body), "/guacamole/?data=") {
 		t.Fatalf("page status/body = %d %q", response.StatusCode, body)
 	}
+	if strings.Contains(response.Header.Get("Content-Security-Policy"), "unsafe-eval") {
+		t.Fatalf("sign-in page has relaxed script policy: %q", response.Header.Get("Content-Security-Policy"))
+	}
 
 	_, brokerPort, _ := net.SplitHostPort(host)
 	localhostHost := net.JoinHostPort("localhost", brokerPort)
@@ -291,8 +294,8 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	body, _ = io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "upstream /guacamole/tunnel") {
-		t.Fatalf("opaque Guacamole origin status/body = %d %q", response.StatusCode, body)
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "upstream /guacamole/tunnel") || !strings.Contains(response.Header.Get("Content-Security-Policy"), "script-src 'self' 'unsafe-inline' 'unsafe-eval'") {
+		t.Fatalf("opaque Guacamole origin status/body/CSP = %d %q %q", response.StatusCode, body, response.Header.Get("Content-Security-Policy"))
 	}
 
 	for _, mutate := range []func(*http.Request){
