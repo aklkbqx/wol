@@ -103,7 +103,7 @@ func TestRemoteResultStaysBoundToOriginalTargetAfterSelectionMoves(t *testing.T)
 	}
 }
 
-func TestActiveActionPanelNamesOriginalTarget(t *testing.T) {
+func TestActiveActionPinsInspectorAndLocksNavigation(t *testing.T) {
 	model := &WakeModel{
 		width: 120, height: 34, theme: NewTheme(false, true), motion: NewMotion(false), phase: phaseReady,
 		devices:  []store.Device{{ID: "windows", Name: "windows", Enabled: true}, {ID: "private2", Name: "private2", Enabled: true}},
@@ -111,8 +111,12 @@ func TestActiveActionPanelNamesOriginalTarget(t *testing.T) {
 		waking: true, actionID: 4, actionTargetID: "windows", actionTarget: "windows", action: "wake-wait",
 	}
 	view := stripANSI(model.View())
-	if !strings.Contains(view, "ACTIVE FOR windows") || !strings.Contains(view, "selection changed") {
+	if !strings.Contains(view, "ACTION TARGET · selection locked") || !strings.Contains(view, "ACTIVE FOR windows") || strings.Contains(view, "> private2") {
 		t.Fatalf("active action was not target-bound after navigation:\n%s", view)
+	}
+	model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if model.selected != 1 || !strings.Contains(model.status, "selection is locked") {
+		t.Fatalf("active action allowed navigation: selected=%d status=%q", model.selected, model.status)
 	}
 }
 
