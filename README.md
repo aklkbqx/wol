@@ -5,7 +5,7 @@ local machine inventory directly from SQLite. Wake and inventory features do
 not require a web application or hosted service.
 
 ```text
-WOL WAKE DESK  v0.4.6  ·  Credit: aklkbqx
+WOL WAKE DESK  v0.4.7  ·  Credit: aklkbqx
 LOCAL INVENTORY  ·  compact
 
 1 Machines   2 Routes   3 Activity

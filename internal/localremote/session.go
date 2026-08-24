@@ -276,6 +276,10 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
 	case strings.HasPrefix(r.URL.Path, "/guacamole/") || r.URL.Path == "/guacamole":
+		// Guacamole 1.6.0 still uses AngularJS expression compilation, which
+		// requires unsafe-eval. Keep that exception scoped to the proxied
+		// Guacamole application; WOL's sign-in and session pages stay strict.
+		setGuacamoleSecurityHeaders(w, r.Host)
 		b.proxy.ServeHTTP(w, r)
 	default:
 		http.NotFound(w, r)
@@ -416,10 +420,18 @@ func isLoopbackName(host string) bool {
 }
 
 func setSecurityHeaders(w http.ResponseWriter, host string) {
+	setSecurityHeadersWithScripts(w, host, "'self' 'unsafe-inline'")
+}
+
+func setGuacamoleSecurityHeaders(w http.ResponseWriter, host string) {
+	setSecurityHeadersWithScripts(w, host, "'self' 'unsafe-inline' 'unsafe-eval'")
+}
+
+func setSecurityHeadersWithScripts(w http.ResponseWriter, host, scriptSources string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ws://"+host+"; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'")
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src "+scriptSources+"; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self' ws://"+host+"; frame-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'self'")
 }
