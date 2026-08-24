@@ -1296,6 +1296,9 @@ func (m *WakeModel) View() string {
 	if m.phase != phaseReady {
 		return m.renderLoadingView(inner, mode)
 	}
+	if m.opening {
+		return m.renderRemoteLoadingView(inner, mode)
+	}
 	var builder strings.Builder
 	header := m.theme.title().Render("WOL WAKE DESK") + "  " + m.theme.muted().Render("v"+m.version+"  ·  Credit: "+m.credit)
 	builder.WriteString("\n" + fitText(header, inner))
@@ -1363,6 +1366,40 @@ func (m *WakeModel) freshnessText() string {
 		return "STALE · last checked " + m.checkedAt.Format("15:04:05")
 	}
 	return "checked " + m.checkedAt.Format("15:04:05")
+}
+
+func (m *WakeModel) renderRemoteLoadingView(width int, mode LayoutMode) string {
+	var builder strings.Builder
+	header := m.theme.title().Render("WOL WAKE DESK") + "  " + m.theme.muted().Render("v"+m.version+"  ·  Credit: "+m.credit)
+	builder.WriteString("\n" + fitText(header, width))
+	builder.WriteString("\n" + fitText(m.theme.muted().Render("LOCAL REMOTE  ·  "+modeLabel(mode)+"  ·  dashboard locked"), width) + "\n\n")
+	builder.WriteString(fitText(m.theme.title().Render("OPENING LOCAL REMOTE"), width) + "\n")
+	target := m.actionTarget
+	if strings.TrimSpace(target) == "" {
+		target = "selected machine"
+	}
+	builder.WriteString(fitText(m.theme.accent().Render(target), width) + "\n\n")
+	if mode == LayoutNarrow || width < 28 {
+		connector := "↓"
+		if m.theme.ASCII {
+			connector = "v"
+		}
+		builder.WriteString(m.theme.accent().Render("WAKE\n"+connector+"\nWAIT\n"+connector+"\nLOCAL") + "\n\n")
+	} else {
+		builder.WriteString(m.renderActionPath([]string{"WAKE", "WAIT", "LOCAL"}, width) + "\n\n")
+	}
+
+	if mode != LayoutNarrow && width >= 36 {
+		builder.WriteString(fitText(m.theme.success().Render(m.theme.Glyph("check")+" Target locked · "+target), width) + "\n")
+		builder.WriteString(fitText(m.theme.accent().Render(m.theme.Glyph("signal-busy")+" Wake if needed and wait for the remote service"), width) + "\n")
+		builder.WriteString(fitText(m.theme.muted().Render(m.theme.Glyph("signal-stopped")+" Prepare private localhost gateway"), width) + "\n")
+		builder.WriteString(fitText(m.theme.muted().Render(m.theme.Glyph("signal-stopped")+" Open browser sign-in"), width) + "\n\n")
+	} else {
+		builder.WriteString(fitText(m.theme.accent().Render(m.theme.Glyph("signal-busy")+" Preparing "+target), width) + "\n\n")
+	}
+	builder.WriteString(fitText(m.theme.muted().Render("The machine list stays hidden until the browser opens."), width) + "\n")
+	builder.WriteString(fitText(m.theme.muted().Render("[Esc] Cancel   [q] Quit"), width) + "\n")
+	return builder.String()
 }
 
 func (m *WakeModel) renderLoadingView(width int, mode LayoutMode) string {
