@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
@@ -201,7 +202,8 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	server.Listener = listener
 	host := listener.Addr().String()
-	server.Config.Handler = newBroker(host, "once", "cookie", "csrf", Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389, UsernameHint: "desktop-user", CertificatePolicy: "strict"}, []byte("0123456789abcdef"), upstreamURL)
+	disconnected := 0
+	server.Config.Handler = newBroker(host, "once", "cookie", "csrf", Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389, UsernameHint: "desktop-user", CertificatePolicy: "strict"}, []byte("0123456789abcdef"), upstreamURL, func() { disconnected++ })
 	server.Start()
 	defer server.Close()
 
@@ -274,7 +276,7 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	body, _ = io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "/guacamole/?data=") || strings.Contains(string(body), "session-only") || strings.Contains(string(body), "Connected through localhost") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "/guacamole/?data=") || !strings.Contains(string(body), `action="/disconnect"`) || !strings.Contains(string(body), `name="csrf" value="csrf"`) || strings.Contains(string(body), "session-only") || strings.Contains(string(body), "Connected through localhost") {
 		t.Fatalf("remote page status/body = %d %q", response.StatusCode, body)
 	}
 
@@ -340,11 +342,87 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
+	for attempt, csrf := range []string{"wrong", "csrf", "csrf"} {
+		req, _ = http.NewRequest(http.MethodPost, server.URL+"/disconnect", strings.NewReader("csrf="+csrf))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		response, err = client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ = io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if csrf == "wrong" {
+			if response.StatusCode != http.StatusForbidden || disconnected != 0 {
+				t.Fatalf("invalid disconnect attempt %d: status=%d calls=%d", attempt, response.StatusCode, disconnected)
+			}
+			continue
+		}
+		if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Remote disconnected") || disconnected != 1 {
+			t.Fatalf("disconnect attempt %d: status=%d calls=%d body=%q", attempt, response.StatusCode, disconnected, body)
+		}
+	}
+
 	response, _ = client.Get(server.URL + "/session")
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("missing cookie status = %d", response.StatusCode)
 	}
 	_ = response.Body.Close()
+}
+
+func TestBrowserDisconnectClosesBrokerAndDockerResources(t *testing.T) {
+	upstream := loopbackServer(t)
+	defer upstream.Close()
+	runner := dockerFake(strings.TrimPrefix(upstream.URL, "http://"))
+	session, err := Start(context.Background(), Config{
+		Protocol: "rdp", Host: "192.168.50.200", Port: 3389, Runner: runner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	response, err := client.Get(session.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	marker := `name="csrf" value="`
+	start := strings.Index(string(body), marker)
+	if start < 0 {
+		t.Fatalf("login page has no disconnect token: %q", body)
+	}
+	start += len(marker)
+	end := strings.Index(string(body)[start:], `"`)
+	if end < 0 {
+		t.Fatalf("login page has malformed disconnect token: %q", body)
+	}
+	csrf := string(body)[start : start+end]
+
+	response, err = client.PostForm("http://"+response.Request.URL.Host+"/disconnect", url.Values{"csrf": {csrf}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Remote disconnected") {
+		t.Fatalf("disconnect status/body = %d %q", response.StatusCode, body)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(runner.snapshot()) != 9 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	commands := runner.snapshot()
+	if len(commands) != 9 || !reflect.DeepEqual(commands[6].Args[:2], []string{"rm", "--force"}) || commands[8].Args[0] != "network" {
+		t.Fatalf("browser disconnect cleanup commands = %#v", commands)
+	}
 }
 
 func TestStartBindsLoopbackBuildsCommandsOpensAndCleansUp(t *testing.T) {
