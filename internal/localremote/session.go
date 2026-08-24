@@ -117,8 +117,9 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 		defer cancel()
 		return nil, joinErrors(err, docker.close(cleanupCtx))
 	}
+	disconnectRequested := make(chan struct{})
 	upstream, _ := url.Parse(upstreamURL)
-	broker := newBroker(expectedHost, oneTimeToken, cookieToken, formToken, cfg, key, upstream)
+	broker := newBroker(expectedHost, oneTimeToken, cookieToken, formToken, cfg, key, upstream, func() { close(disconnectRequested) })
 	server := &http.Server{
 		Handler:           broker,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -147,6 +148,8 @@ func Start(ctx context.Context, cfg Config) (*Session, error) {
 	go func() {
 		select {
 		case <-ctx.Done():
+			_ = session.Close()
+		case <-disconnectRequested:
 			_ = session.Close()
 		case <-done:
 			_ = session.Close()
@@ -197,19 +200,21 @@ func validateConfig(cfg Config) error {
 }
 
 type brokerHandler struct {
-	expectedHost string
-	oneTimeToken string
-	cookieToken  string
-	formToken    string
-	config       Config
-	key          []byte
-	launchToken  string
-	proxy        *httputil.ReverseProxy
-	mu           sync.Mutex
-	consumed     bool
+	expectedHost   string
+	oneTimeToken   string
+	cookieToken    string
+	formToken      string
+	config         Config
+	key            []byte
+	launchToken    string
+	proxy          *httputil.ReverseProxy
+	disconnect     func()
+	mu             sync.Mutex
+	consumed       bool
+	disconnectOnce sync.Once
 }
 
-func newBroker(expectedHost, oneTimeToken, cookieToken, formToken string, cfg Config, key []byte, upstream *url.URL) http.Handler {
+func newBroker(expectedHost, oneTimeToken, cookieToken, formToken string, cfg Config, key []byte, upstream *url.URL, disconnect func()) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
@@ -237,7 +242,7 @@ func newBroker(expectedHost, oneTimeToken, cookieToken, formToken string, cfg Co
 		}
 		return nil
 	}
-	return &brokerHandler{expectedHost: expectedHost, oneTimeToken: oneTimeToken, cookieToken: cookieToken, formToken: formToken, config: cfg, key: append([]byte(nil), key...), proxy: proxy}
+	return &brokerHandler{expectedHost: expectedHost, oneTimeToken: oneTimeToken, cookieToken: cookieToken, formToken: formToken, config: cfg, key: append([]byte(nil), key...), proxy: proxy, disconnect: disconnect}
 }
 
 func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +270,8 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		b.connect(w, r)
 	case r.URL.Path == "/remote":
 		b.remote(w, r)
+	case r.URL.Path == "/disconnect":
+		b.closeFromBrowser(w, r)
 	case r.URL.Path == "/healthz":
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ready"}`))
@@ -273,6 +280,28 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (b *brokerHandler) closeFromBrowser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed.", http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	if err := r.ParseForm(); err != nil || !b.validFormToken(r.Form.Get("csrf")) {
+		http.Error(w, "Invalid local disconnect token.", http.StatusForbidden)
+		return
+	}
+	serveClosedPage(w)
+	b.disconnectOnce.Do(func() {
+		if b.disconnect != nil {
+			b.disconnect()
+		}
+	})
+}
+
+func (b *brokerHandler) validFormToken(presented string) bool {
+	return len(presented) == len(b.formToken) && subtle.ConstantTimeCompare([]byte(presented), []byte(b.formToken)) == 1
 }
 
 func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
@@ -286,7 +315,7 @@ func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	presentedToken := r.Form.Get("csrf")
-	if len(presentedToken) != len(b.formToken) || subtle.ConstantTimeCompare([]byte(presentedToken), []byte(b.formToken)) != 1 {
+	if !b.validFormToken(presentedToken) {
 		http.Error(w, "Invalid local sign-in token.", http.StatusForbidden)
 		return
 	}
@@ -336,7 +365,7 @@ func (b *brokerHandler) remote(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/session", http.StatusSeeOther)
 		return
 	}
-	servePage(w, launchToken)
+	servePage(w, launchToken, b.formToken)
 }
 
 func (b *brokerHandler) consume(w http.ResponseWriter, r *http.Request) {
