@@ -278,11 +278,24 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 		t.Fatalf("remote page status/body = %d %q", response.StatusCode, body)
 	}
 
+	// Guacamole iframe/tunnel requests may use an opaque Origin. They remain
+	// protected by loopback host+port and the unguessable session cookie.
+	req, _ = http.NewRequest(http.MethodGet, server.URL+"/guacamole/tunnel", nil)
+	req.Header.Set("Origin", "null")
+	req.AddCookie(cookie)
+	response, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "upstream /guacamole/tunnel") {
+		t.Fatalf("opaque Guacamole origin status/body = %d %q", response.StatusCode, body)
+	}
+
 	for _, mutate := range []func(*http.Request){
 		func(r *http.Request) { r.Host = "evil.test" },
 		func(r *http.Request) { r.Host = net.JoinHostPort("127.0.0.1", "1") },
-		func(r *http.Request) { r.Header.Set("Origin", "https://evil.test") },
-		func(r *http.Request) { r.Header.Set("Origin", "http://192.168.1.2:"+brokerPort) },
 	} {
 		req, _ = http.NewRequest(http.MethodGet, server.URL+"/session", nil)
 		req.AddCookie(cookie)
@@ -293,6 +306,23 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 		}
 		if response.StatusCode != http.StatusForbidden {
 			t.Fatalf("guard status = %d", response.StatusCode)
+		}
+		_ = response.Body.Close()
+	}
+
+	for _, invalidOrigin := range []string{"", "null", "https://evil.test", "http://192.168.1.2:" + brokerPort} {
+		req, _ = http.NewRequest(http.MethodPost, server.URL+"/connect", strings.NewReader("username=desktop-user&password=secret"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if invalidOrigin != "" {
+			req.Header.Set("Origin", invalidOrigin)
+		}
+		req.AddCookie(cookie)
+		response, err = client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusForbidden {
+			t.Fatalf("unsafe sign-in origin %q status = %d", invalidOrigin, response.StatusCode)
 		}
 		_ = response.Body.Close()
 	}

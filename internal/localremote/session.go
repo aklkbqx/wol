@@ -234,8 +234,8 @@ func newBroker(expectedHost, oneTimeToken, cookieToken string, cfg Config, key [
 
 func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setSecurityHeaders(w, b.expectedHost)
-	if !validLocalRequest(r, b.expectedHost) {
-		http.Error(w, "Invalid local session origin.", http.StatusForbidden)
+	if !validLocalHost(r.Host, b.expectedHost) {
+		http.Error(w, "Invalid local session host.", http.StatusForbidden)
 		return
 	}
 	// localhost and 127.0.0.1 are equivalent loopback names. Build the CSP
@@ -254,6 +254,10 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/session":
 		serveLoginPage(w, b.config, "")
 	case r.URL.Path == "/connect":
+		if !validLocalOrigin(r, b.expectedHost) {
+			http.Error(w, "Invalid local sign-in origin.", http.StatusForbidden)
+			return
+		}
 		b.connect(w, r)
 	case r.URL.Path == "/remote":
 		b.remote(w, r)
@@ -355,19 +359,21 @@ func (b *brokerHandler) validCookie(r *http.Request) bool {
 	return err == nil && len(cookie.Value) == len(b.cookieToken) && subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(b.cookieToken)) == 1
 }
 
-func validLocalRequest(r *http.Request, expectedHost string) bool {
+func validLocalHost(requestHost, expectedHost string) bool {
 	_, expectedPort, err := net.SplitHostPort(expectedHost)
 	if err != nil {
 		return false
 	}
-	requestHost, requestPort, err := net.SplitHostPort(r.Host)
-	if err != nil || requestPort != expectedPort || !isLoopbackName(requestHost) {
+	host, requestPort, err := net.SplitHostPort(requestHost)
+	return err == nil && requestPort == expectedPort && isLoopbackName(host)
+}
+
+func validLocalOrigin(r *http.Request, expectedHost string) bool {
+	if !validLocalHost(r.Host, expectedHost) {
 		return false
 	}
+	_, expectedPort, _ := net.SplitHostPort(expectedHost)
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		return true
-	}
 	parsed, err := url.Parse(origin)
 	if err != nil || parsed.Scheme != "http" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return false
