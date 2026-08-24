@@ -120,6 +120,31 @@ func TestActiveActionPinsInspectorAndLocksNavigation(t *testing.T) {
 	}
 }
 
+func TestWakeAndRemoteUsesFullScreenLoadingUntilBrowserOpens(t *testing.T) {
+	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 34}} {
+		model := &WakeModel{
+			width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false), phase: phaseReady,
+			devices: []store.Device{{ID: "windows", Name: "windows", Enabled: true}}, presence: map[string]string{"windows": "offline"},
+			profiles: map[string]store.RemoteProfile{}, opening: true, actionTargetID: "windows", actionTarget: "windows", action: "wake-remote",
+		}
+		view := stripANSI(model.View())
+		if !strings.Contains(view, "OPENING") || !strings.Contains(view, "windows") || !strings.Contains(view, "WAKE") || !strings.Contains(view, "WAIT") || !strings.Contains(view, "LOCAL") {
+			t.Fatalf("%dx%d remote loading lost essential state:\n%s", size.width, size.height, view)
+		}
+		if strings.Contains(view, "FLEET") || strings.Contains(view, "Machines") || strings.Contains(view, "[j/k]") {
+			t.Fatalf("%dx%d remote loading exposed interactive dashboard:\n%s", size.width, size.height, view)
+		}
+		for lineNo, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > size.width {
+				t.Fatalf("%dx%d loading line %d overflows at %d: %q", size.width, size.height, lineNo, got, line)
+			}
+		}
+		if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
+			t.Fatalf("%dx%d loading uses %d lines:\n%s", size.width, size.height, lines, view)
+		}
+	}
+}
+
 func TestCompactWakeDeskFitsShortTerminalHeight(t *testing.T) {
 	model := &WakeModel{
 		width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false),
