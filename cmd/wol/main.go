@@ -17,8 +17,10 @@ import (
 	"golang.org/x/term"
 )
 
-const appVersion = buildinfo.Version
-const appCredit = buildinfo.Credit
+var (
+	appVersion = buildinfo.Version
+	appCredit  = buildinfo.Credit
+)
 
 func main() {
 	if len(os.Args) < 2 {

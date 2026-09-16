@@ -7,10 +7,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/aklkbqx/wol/internal/store"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type wakeFormKind string
@@ -26,20 +27,114 @@ type wakeForm struct {
 	id       string
 	labels   []string
 	values   []string
+	inputs   []textinput.Model
 	selected int
 	error    string
 	saving   bool
 }
 
+func newWakeForm(kind wakeFormKind, id string, labels []string, initialValues []string, theme Theme) *wakeForm {
+	inputs := make([]textinput.Model, len(labels))
+	values := make([]string, len(labels))
+	for i := range labels {
+		ti := textinput.New()
+		ti.Prompt = ""
+		ti.CharLimit = 128
+		val := ""
+		if i < len(initialValues) {
+			val = initialValues[i]
+		}
+		ti.SetValue(val)
+		values[i] = val
+		if theme.Colors {
+			ti.TextStyle = theme.base()
+			ti.Cursor.Style = theme.accent()
+		} else {
+			ti.TextStyle = lipgloss.NewStyle()
+			ti.Cursor.Style = lipgloss.NewStyle().Reverse(true)
+		}
+		if i == 0 {
+			ti.Focus()
+		} else {
+			ti.Blur()
+		}
+		inputs[i] = ti
+	}
+	return &wakeForm{
+		kind:     kind,
+		id:       id,
+		labels:   labels,
+		values:   values,
+		inputs:   inputs,
+		selected: 0,
+	}
+}
+
+func (f *wakeForm) ensureInputs(theme Theme) {
+	if len(f.inputs) != len(f.labels) {
+		f.inputs = make([]textinput.Model, len(f.labels))
+		for i := range f.labels {
+			ti := textinput.New()
+			ti.Prompt = ""
+			ti.CharLimit = 128
+			val := ""
+			if i < len(f.values) {
+				val = f.values[i]
+			}
+			ti.SetValue(val)
+			if theme.Colors {
+				ti.TextStyle = theme.base()
+				ti.Cursor.Style = theme.accent()
+			} else {
+				ti.TextStyle = lipgloss.NewStyle()
+				ti.Cursor.Style = lipgloss.NewStyle().Reverse(true)
+			}
+			if i == f.selected {
+				ti.Focus()
+			} else {
+				ti.Blur()
+			}
+			f.inputs[i] = ti
+		}
+	} else {
+		for i := range f.inputs {
+			if i < len(f.values) && f.inputs[i].Value() != f.values[i] {
+				f.inputs[i].SetValue(f.values[i])
+			}
+			if i == f.selected {
+				f.inputs[i].Focus()
+			} else {
+				f.inputs[i].Blur()
+			}
+		}
+	}
+}
+
+func (f *wakeForm) setSelected(index int) {
+	if len(f.labels) == 0 {
+		f.selected = 0
+		return
+	}
+	f.selected = (index + len(f.labels)) % len(f.labels)
+	for i := range f.inputs {
+		if i == f.selected {
+			f.inputs[i].Focus()
+		} else {
+			f.inputs[i].Blur()
+		}
+	}
+}
+
 func (m *WakeModel) beginAdd() {
 	if m.tab == 0 {
-		m.form = &wakeForm{kind: deviceForm, labels: deviceFormLabels(), values: make([]string, 9)}
-		m.form.values[4] = "9"
+		values := make([]string, 9)
+		values[4] = "9"
+		m.form = newWakeForm(deviceForm, "", deviceFormLabels(), values, m.theme)
 		m.status = "Add machine: fill each field and press Enter."
 		return
 	}
 	if m.tab == 1 {
-		m.form = &wakeForm{kind: relayForm, labels: relayFormLabels(), values: []string{"", "", "22", "br-lan", ""}}
+		m.form = newWakeForm(relayForm, "", relayFormLabels(), []string{"", "", "22", "br-lan", ""}, m.theme)
 		m.status = "Add route: fill each field and press Enter."
 	}
 }
@@ -52,7 +147,11 @@ func (m *WakeModel) beginEdit() {
 			return
 		}
 		device := devices[m.selected]
-		m.form = &wakeForm{kind: deviceForm, id: device.ID, labels: deviceFormLabels(), values: []string{device.Name, device.MACAddress, device.IPAddress, device.BroadcastAddress, strconv.Itoa(device.Port), device.Interface, strconv.Itoa(device.VerifyPort), device.WakeStrategy, device.WakeRelayID}}
+		m.form = newWakeForm(deviceForm, device.ID, deviceFormLabels(), []string{
+			device.Name, device.MACAddress, device.IPAddress, device.BroadcastAddress,
+			strconv.Itoa(device.Port), device.Interface, strconv.Itoa(device.VerifyPort),
+			device.WakeStrategy, device.WakeRelayID,
+		}, m.theme)
 		m.status = "Edit machine: press Enter to advance and save."
 		return
 	}
@@ -63,7 +162,9 @@ func (m *WakeModel) beginEdit() {
 			return
 		}
 		relay := relays[m.selected]
-		m.form = &wakeForm{kind: relayForm, id: relay.ID, labels: relayFormLabels(), values: []string{relay.Name, relay.Address, strconv.Itoa(relay.Port), relay.Interface, relay.SSHUser}}
+		m.form = newWakeForm(relayForm, relay.ID, relayFormLabels(), []string{
+			relay.Name, relay.Address, strconv.Itoa(relay.Port), relay.Interface, relay.SSHUser,
+		}, m.theme)
 		m.status = "Edit route: press Enter to advance and save."
 	}
 }
@@ -88,14 +189,17 @@ func (m *WakeModel) beginRemoteProfile() {
 		if protocol == "sunshine" {
 			mode = "native-moonlight"
 		}
-		profile = store.RemoteProfile{DeviceID: device.ID, Protocol: protocol, Host: device.IPAddress, Port: port, VerifyPort: port, Mode: mode, AppName: "Desktop", FPS: 60, Resolution: "1920x1080", Enabled: true}
+		profile = store.RemoteProfile{
+			DeviceID: device.ID, Protocol: protocol, Host: device.IPAddress,
+			Port: port, VerifyPort: port, Mode: mode, AppName: "Desktop",
+			FPS: 60, Resolution: "1920x1080", Enabled: true,
+		}
 	}
-	m.form = &wakeForm{
-		kind:   remoteProfileForm,
-		id:     device.ID,
-		labels: remoteProfileFormLabels(),
-		values: []string{profile.Protocol, profile.Host, strconv.Itoa(profile.Port), strconv.Itoa(profile.VerifyPort), strconv.Itoa(profile.FPS), profile.Resolution, profile.AppName},
-	}
+	m.form = newWakeForm(remoteProfileForm, device.ID, remoteProfileFormLabels(), []string{
+		profile.Protocol, profile.Host, strconv.Itoa(profile.Port),
+		strconv.Itoa(profile.VerifyPort), strconv.Itoa(profile.FPS),
+		profile.Resolution, profile.AppName,
+	}, m.theme)
 	m.status = "Remote profile. Passwords are never stored."
 }
 
@@ -138,29 +242,24 @@ func (m *WakeModel) deleteConfirmed() tea.Cmd {
 	}
 }
 
-func (m *WakeModel) handleFormKey(name string) tea.Cmd {
+func (m *WakeModel) handleFormKey(msg tea.KeyMsg) tea.Cmd {
 	form := m.form
 	if form == nil {
 		return nil
 	}
+	form.ensureInputs(m.theme)
+	name := msg.String()
 	if name == "esc" {
 		m.form = nil
 		m.status = "Edit cancelled."
 		return nil
 	}
 	if name == "up" || name == "shift+tab" {
-		form.selected = (form.selected + len(form.labels) - 1) % len(form.labels)
+		form.setSelected(form.selected - 1)
 		return nil
 	}
 	if name == "down" || name == "tab" {
-		form.selected = (form.selected + 1) % len(form.labels)
-		return nil
-	}
-	if name == "backspace" {
-		runes := []rune(form.values[form.selected])
-		if len(runes) > 0 {
-			form.values[form.selected] = string(runes[:len(runes)-1])
-		}
+		form.setSelected(form.selected + 1)
 		return nil
 	}
 	if name == "enter" {
@@ -168,14 +267,17 @@ func (m *WakeModel) handleFormKey(name string) tea.Cmd {
 			return nil
 		}
 		if form.selected < len(form.labels)-1 {
-			form.selected++
+			form.setSelected(form.selected + 1)
 			return nil
 		}
 		return m.saveForm()
 	}
-	if runes := []rune(name); len(runes) == 1 && unicode.IsPrint(runes[0]) {
-		form.values[form.selected] += name
+	if form.selected >= 0 && form.selected < len(form.inputs) {
+		var cmd tea.Cmd
+		form.inputs[form.selected], cmd = form.inputs[form.selected].Update(msg)
+		form.values[form.selected] = form.inputs[form.selected].Value()
 		form.error = ""
+		return cmd
 	}
 	return nil
 }
@@ -186,7 +288,13 @@ func (m *WakeModel) saveForm() tea.Cmd {
 	}
 	m.form.saving = true
 	form := *m.form
+	form.ensureInputs(m.theme)
 	values := append([]string(nil), form.values...)
+	for i := range form.inputs {
+		if i < len(values) {
+			values[i] = form.inputs[i].Value()
+		}
+	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -327,6 +435,10 @@ func validateRemoteProfile(profile store.RemoteProfile) error {
 
 func (m *WakeModel) renderForm(width int) string {
 	form := m.form
+	if form == nil {
+		return ""
+	}
+	form.ensureInputs(m.theme)
 	start, end := 0, len(form.labels)
 	if m.height > 0 && m.height < 32 && len(form.labels) > 6 {
 		start = max(0, form.selected-3)
@@ -344,11 +456,13 @@ func (m *WakeModel) renderForm(width int) string {
 		if i == form.selected {
 			marker = m.theme.Glyph("arrow")
 		}
-		value := form.values[i]
-		if i == form.selected {
-			value += "_"
+		var val string
+		if i == form.selected && i < len(form.inputs) {
+			val = form.inputs[i].View()
+		} else if i < len(form.values) {
+			val = form.values[i]
 		}
-		rows = append(rows, fmt.Sprintf("%s %-18s %s", marker, label, fitText(value, max(12, width-26))))
+		rows = append(rows, fmt.Sprintf("%s %-18s %s", marker, label, fitText(val, max(12, width-26))))
 	}
 	if end < len(form.labels) {
 		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("%d more field(s)", len(form.labels)-end)))

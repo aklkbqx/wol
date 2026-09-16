@@ -25,8 +25,12 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	if active {
 		lock = "locked · "
 	}
+	divider := strings.Repeat("─", min(rowWidth, 24))
+	if m.theme.ASCII {
+		divider = strings.Repeat("-", min(rowWidth, 24))
+	}
 	lines := []string{
-		m.theme.muted().Render(lock + "selected"),
+		m.theme.accent().Render(fitText(lock+"INSPECTOR", rowWidth)),
 		m.theme.title().Render(fitText(device.Name, rowWidth)),
 		fitText(power+"  "+action, rowWidth),
 		m.theme.muted().Render(fitText(wake.detail, rowWidth)),
@@ -37,10 +41,10 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 		lines = append(lines, m.theme.muted().Render("enter  wake or stream"))
 	}
 	lines = append(lines,
-		"",
-		m.theme.muted().Render(fitText(device.IPAddress, rowWidth)),
-		m.theme.muted().Render(fitText(device.MACAddress, rowWidth)),
-		m.theme.muted().Render(fitText(m.routeText(device), rowWidth)),
+		m.theme.muted().Render(divider),
+		m.theme.muted().Render("IP   : ")+fitText(device.IPAddress, max(1, rowWidth-7)),
+		m.theme.muted().Render("MAC  : ")+fitText(device.MACAddress, max(1, rowWidth-7)),
+		m.theme.muted().Render("Route: ")+fitText(m.routeText(device), max(1, rowWidth-7)),
 	)
 	return strings.Join(lines, "\n")
 }
