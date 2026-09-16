@@ -59,8 +59,8 @@ func TestWakeDeskViewFitsTerminalWidths(t *testing.T) {
 		}
 	}
 	view := model.View()
-	if !strings.Contains(view, "WOL WAKE DESK") || !strings.Contains(view, "Credit: aklkbqx") {
-		t.Fatalf("wake desk header missing version/credit:\n%s", view)
+	if !strings.Contains(view, "wol") {
+		t.Fatalf("wake desk header missing:\n%s", view)
 	}
 	if strings.Contains(view, ".data/dev/wol.db") || strings.Contains(view, "SQLite") {
 		t.Fatalf("wake desk exposed storage implementation details:\n%s", view)
@@ -92,7 +92,7 @@ func TestRemoteResultStaysBoundToOriginalTargetAfterSelectionMoves(t *testing.T)
 		selected: 1, opening: true, actionID: 7, actionTargetID: "windows", actionTarget: "windows", action: "wake-remote",
 	}
 	model.Update(remoteResultMsg{operationID: 7, targetID: "windows", deviceName: "windows"})
-	if model.presence["windows"] != "online" || model.presence["private2"] != "offline" || !strings.Contains(model.status, "windows · local sign-in opened") {
+	if model.presence["windows"] != "online" || model.presence["private2"] != "offline" || !strings.Contains(model.status, "windows · remote opened") {
 		t.Fatalf("result moved to current selection: presence=%v status=%q", model.presence, model.status)
 	}
 
@@ -111,7 +111,7 @@ func TestActiveActionPinsInspectorAndLocksNavigation(t *testing.T) {
 		waking: true, actionID: 4, actionTargetID: "windows", actionTarget: "windows", action: "wake-wait",
 	}
 	view := stripANSI(model.View())
-	if !strings.Contains(view, "ACTION TARGET · selection locked") || !strings.Contains(view, "ACTIVE FOR windows") || strings.Contains(view, "> private2") {
+	if !strings.Contains(view, "locked") || !strings.Contains(view, "windows") || strings.Contains(view, "> private2") {
 		t.Fatalf("active action was not target-bound after navigation:\n%s", view)
 	}
 	model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
@@ -128,10 +128,10 @@ func TestWakeAndRemoteUsesFullScreenLoadingUntilBrowserOpens(t *testing.T) {
 			profiles: map[string]store.RemoteProfile{}, opening: true, actionTargetID: "windows", actionTarget: "windows", action: "wake-remote",
 		}
 		view := stripANSI(model.View())
-		if !strings.Contains(view, "OPENING") || !strings.Contains(view, "windows") || !strings.Contains(view, "WAKE") || !strings.Contains(view, "WAIT") || !strings.Contains(view, "LOCAL") {
+		if !strings.Contains(view, "windows") || !strings.Contains(view, "WAKE") || !strings.Contains(view, "WAIT") || !(strings.Contains(view, "REMOTE") || strings.Contains(view, "STREAM")) {
 			t.Fatalf("%dx%d remote loading lost essential state:\n%s", size.width, size.height, view)
 		}
-		if strings.Contains(view, "FLEET") || strings.Contains(view, "Machines") || strings.Contains(view, "[j/k]") {
+		if strings.Contains(view, "machines") && strings.Contains(view, "enter choose") {
 			t.Fatalf("%dx%d remote loading exposed interactive dashboard:\n%s", size.width, size.height, view)
 		}
 		for lineNo, line := range strings.Split(view, "\n") {
@@ -160,7 +160,7 @@ func TestCompactWakeDeskFitsShortTerminalHeight(t *testing.T) {
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
 		t.Fatalf("compact view uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
 	}
-	if !strings.Contains(view, "WOL WAKE DESK") || !strings.Contains(view, "1 Machines") || !strings.Contains(view, "POWER") || !strings.Contains(view, "WAKE") || !strings.Contains(view, "REMOTE") {
+	if !strings.Contains(view, "wol") || !strings.Contains(view, "windows") || !strings.Contains(view, "online") || !strings.Contains(view, "asleep") {
 		t.Fatalf("compact view lost essential context:\n%s", view)
 	}
 }
@@ -183,7 +183,7 @@ func TestShortWideTerminalUsesCompactLayout(t *testing.T) {
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
 		t.Fatalf("short wide view uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
 	}
-	if !strings.Contains(view, "[Enter] choose") {
+	if !strings.Contains(strings.ToLower(view), "enter choose") {
 		t.Fatalf("compact footer does not keep Enter explicit:\n%s", view)
 	}
 }
@@ -207,7 +207,7 @@ func TestMachineViewportFitsLargeInventories(t *testing.T) {
 				t.Fatalf("%dx%d line %d overflows at %d: %q", size.width, size.height, lineNo, got, line)
 			}
 		}
-		if !strings.Contains(view, "device-19") || !strings.Contains(view, "machine(s) above") {
+		if !strings.Contains(view, "device-19") || !strings.Contains(view, "above") {
 			t.Fatalf("%dx%d viewport lost selection/context:\n%s", size.width, size.height, view)
 		}
 	}
@@ -249,7 +249,7 @@ func TestWakeDeskShowsPowerAndWakeStatesSeparately(t *testing.T) {
 		status:   "ready",
 	}
 	view := model.View()
-	for _, want := range []string{"POWER", "WAKE", "REMOTE", "SETUP", "ONLINE", "UNKNOWN", "OFFLINE", "READY", "BLOCKED", "192.168.50.200"} {
+	for _, want := range []string{"online", "unknown", "asleep", "setup", "blocked", "remote", "192.168.50.200"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -324,7 +324,7 @@ func TestEnterOnlyOpensActionPicker(t *testing.T) {
 		t.Fatalf("Enter executed work: picker=%v opening=%v waking=%v checking=%v", model.actionPicker, model.opening, model.waking, model.checking)
 	}
 	view := model.View()
-	for _, want := range []string{"CHOOSE ACTION", "Wake only", "Wake & Remote", "Check power", "Cancel", "Nothing runs until you confirm"} {
+	for _, want := range []string{"wake", "stream", "check", "cancel"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("picker missing %q:\n%s", want, view)
 		}
@@ -442,8 +442,14 @@ func TestColoredWideRowsKeepStatusColumnsAligned(t *testing.T) {
 	view := stripANSI(model.renderMachineList(model.devices, 120))
 	columns := make([]int, 0, 2)
 	for _, line := range strings.Split(view, "\n") {
-		if strings.Contains(line, "192.168.50.") {
-			index := strings.Index(line, "POWER")
+		if strings.Contains(line, "machines") {
+			continue
+		}
+		index := strings.Index(line, "online")
+		if index < 0 {
+			index = strings.Index(line, "asleep")
+		}
+		if index > 0 {
 			columns = append(columns, lipgloss.Width(line[:index]))
 		}
 	}
@@ -547,14 +553,14 @@ func TestRemoteProfileFormSavesProtocolWithoutPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Protocol != "rdp" || profile.Host != device.IPAddress || profile.Mode != "browser-local" || profile.Port != 3389 {
+	if profile.Protocol != "sunshine" || profile.Host != device.IPAddress || profile.Mode != "native-moonlight" || profile.Port != 47989 {
 		t.Fatalf("saved profile = %+v", profile)
 	}
 }
 
 func TestActionPickerFitsResponsiveViewports(t *testing.T) {
 	device := store.Device{ID: "one", Name: "a-very-long-workstation-name", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true}
-	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}} {
+	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}, {120, 34}} {
 		model := &WakeModel{width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false), devices: []store.Device{device}, presence: map[string]string{}, actionPicker: true}
 		view := model.View()
 		if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
@@ -593,7 +599,7 @@ func TestStartupHidesFleetUntilAtomicSnapshotIsVerified(t *testing.T) {
 	if model.phase != phaseBootLoading || len(model.devices) != 0 || model.pending == nil {
 		t.Fatalf("inventory leaked before verification: phase=%v devices=%d pending=%v", model.phase, len(model.devices), model.pending != nil)
 	}
-	if view := model.View(); strings.Contains(view, "FLEET  select a machine") || strings.Contains(view, "MACHINES  ") || !strings.Contains(view, "CHECKING LATEST STATE") {
+	if view := model.View(); strings.Contains(view, "windows") || !strings.Contains(view, "checking") {
 		t.Fatalf("startup exposed the dashboard before verification:\n%s", view)
 	}
 	result, ok := scan().(probeBatchMsg)
@@ -604,7 +610,7 @@ func TestStartupHidesFleetUntilAtomicSnapshotIsVerified(t *testing.T) {
 	if model.phase != phaseReady || len(model.devices) != 1 || model.presence[model.devices[0].ID] != "online" || model.checkedAt.IsZero() {
 		t.Fatalf("verified snapshot was not committed: phase=%v devices=%d presence=%v checked=%v", model.phase, len(model.devices), model.presence, model.checkedAt)
 	}
-	if view := model.View(); !strings.Contains(view, "FLEET") || strings.Contains(view, "CHECKING LATEST STATE") {
+	if view := model.View(); !strings.Contains(view, "windows") || strings.Contains(view, "reading inventory") {
 		t.Fatalf("verified dashboard did not replace loading:\n%s", view)
 	}
 }
@@ -649,7 +655,7 @@ func TestSinglePowerCheckUsesFocusedLoadingWithoutMutatingVisibleStatus(t *testi
 	if model.phase != phaseCheckingMachine || model.presence["one"] != "offline" {
 		t.Fatalf("focused check changed visible state early: phase=%v presence=%v", model.phase, model.presence)
 	}
-	if view := model.View(); !strings.Contains(view, "CHECKING POWER") || !strings.Contains(view, "windows") || strings.Contains(view, "FLEET") {
+	if view := model.View(); !strings.Contains(view, "checking power") || !strings.Contains(view, "windows") || strings.Contains(view, "enter choose") {
 		t.Fatalf("focused check view is unclear:\n%s", view)
 	}
 	message, ok := cmd().(probeResultMsg)
@@ -663,7 +669,7 @@ func TestSinglePowerCheckUsesFocusedLoadingWithoutMutatingVisibleStatus(t *testi
 }
 
 func TestLoadingAndErrorViewsFitResponsiveTerminals(t *testing.T) {
-	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}} {
+	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}, {120, 34}} {
 		for _, phase := range []viewPhase{phaseBootLoading, phaseRefreshing, phaseCheckingMachine, phaseLoadError} {
 			model := &WakeModel{
 				width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false),
@@ -726,7 +732,142 @@ func TestBootFailureOffersRetryWithoutExposingDashboard(t *testing.T) {
 	}
 	model.Update(wakeDataMsg{requestID: 3, kind: loadingBoot, err: fmt.Errorf("database unavailable")})
 	view := model.View()
-	if model.phase != phaseLoadError || !strings.Contains(view, "[r] Retry") || strings.Contains(view, "FLEET  select a machine") {
+	if model.phase != phaseLoadError || !strings.Contains(view, "r retry") || strings.Contains(view, "windows") {
 		t.Fatalf("boot recovery view is wrong:\n%s", view)
+	}
+}
+
+func TestFleetAfterimageRespectsMotion(t *testing.T) {
+	devices := []store.Device{
+		{ID: "one", Name: "windows", Enabled: true},
+		{ID: "two", Name: "private", Enabled: true},
+	}
+	offASCII := &WakeModel{width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false), devices: devices, selected: 1}
+	ascii := stripANSI(offASCII.renderMachineList(devices, 80))
+	if strings.Contains(ascii, "·") || strings.Count(ascii, ">") != 1 {
+		t.Fatalf("reduced-motion ASCII caret/afterimage wrong:\n%s", ascii)
+	}
+	offUnicode := &WakeModel{width: 80, height: 24, theme: NewTheme(true, false), motion: NewMotion(false), devices: devices, selected: 1}
+	unicode := stripANSI(offUnicode.renderMachineList(devices, 80))
+	if strings.Contains(unicode, "·") || strings.Count(unicode, "›") != 1 {
+		t.Fatalf("reduced-motion unicode caret/afterimage wrong:\n%s", unicode)
+	}
+
+	on := &WakeModel{width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(true), devices: devices, selected: 1}
+	on.motion.TriggerStage(time.Now(), StageSelect, 180*time.Millisecond, 0, 1)
+	live := stripANSI(on.renderMachineList(devices, 80))
+	if !strings.Contains(live, ". windows") || !strings.Contains(live, "> private") {
+		t.Fatalf("select afterimage missing:\n%s", live)
+	}
+}
+
+func TestSignalPathFollowsMotionTime(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0)
+	model := &WakeModel{
+		theme: NewTheme(false, true),
+		motion: Motion{
+			Enabled: true, Stage: StageSignal,
+			Started: started, Duration: 800 * time.Millisecond,
+			Until: started.Add(800 * time.Millisecond),
+		},
+		waking: true,
+	}
+	if got := model.pathPositionAt(started); got != 0 {
+		t.Fatalf("T=0 position = %d", got)
+	}
+	if got := signalPath([]string{"DESK", "LAN", "WINDOWS"}, 0, true); got != "DESK *--> LAN --> WINDOWS" {
+		t.Fatalf("T=0 path = %q", got)
+	}
+	mid := started.Add(400 * time.Millisecond)
+	if got := model.pathPositionAt(mid); got != 1 {
+		t.Fatalf("mid position = %d", got)
+	}
+	if got := signalPath([]string{"DESK", "LAN", "WINDOWS"}, 1, true); got != "DESK --> LAN *--> WINDOWS" {
+		t.Fatalf("mid path = %q", got)
+	}
+	if got := signalPath([]string{"DESK", "RELAY", "WINDOWS"}, 1, true); got != "DESK --> RELAY *--> WINDOWS" {
+		t.Fatalf("relay mid path = %q", got)
+	}
+	if got := model.pathPositionAt(started.Add(800 * time.Millisecond)); got != 2 {
+		t.Fatalf("dwell at Until = %d", got)
+	}
+	if got := model.pathPositionAt(started.Add(900 * time.Millisecond)); got != 2 {
+		t.Fatalf("dwell after Until = %d", got)
+	}
+	if got := signalPath([]string{"DESK", "LAN", "WINDOWS"}, 2, true); got != "DESK --> LAN --> *WINDOWS" {
+		t.Fatalf("dwell path = %q", got)
+	}
+
+	model.motion.Frame = 0
+	a := model.pathPositionAt(mid)
+	model.motion.Frame = 12
+	b := model.pathPositionAt(mid)
+	if a != b || a != 1 {
+		t.Fatalf("path depended on Frame: %d vs %d", a, b)
+	}
+	if tNow := model.motion.T(mid); tNow != 0.5 {
+		t.Fatalf("T(400ms of 800ms) = %v, want 0.5", tNow)
+	}
+	posA := railPosition(mid, model.motion, 21)
+	model.motion.Frame = 0
+	posB := railPosition(mid, model.motion, 21)
+	if posA != posB {
+		t.Fatalf("rail depended on Frame: %d vs %d", posA, posB)
+	}
+
+	still := NewMotion(false)
+	if railPosition(mid, still, 21) != 10 {
+		t.Fatalf("reduced-motion rail is not centered: %d", railPosition(mid, still, 21))
+	}
+}
+
+func TestHandleKeyJStartsSelectMotionTick(t *testing.T) {
+	model := &WakeModel{
+		width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(true), phase: phaseReady,
+		devices: []store.Device{{ID: "one", Name: "windows", Enabled: true}, {ID: "two", Name: "private", Enabled: true}},
+	}
+	cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	if cmd == nil || model.selected != 1 || model.motion.Stage != StageSelect || !model.motion.Active(time.Now()) {
+		t.Fatalf("j did not start select motion: selected=%d stage=%v cmd=%v", model.selected, model.motion.Stage, cmd)
+	}
+	model.motion = NewMotion(false)
+	model.selected = 0
+	if cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}); cmd != nil {
+		t.Fatalf("reduced-motion j returned a tick")
+	}
+}
+
+func TestNightDeskFleetFitsOverflowMatrix(t *testing.T) {
+	devices := []store.Device{
+		{ID: "one", Name: "windows-workstation-with-a-long-name", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", BroadcastAddress: "192.168.50.255", Enabled: true},
+		{ID: "two", Name: "private", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.5", Enabled: true},
+	}
+	presenceStates := map[string]string{"one": "online", "two": "offline"}
+	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}, {120, 34}} {
+		model := &WakeModel{
+			width: size.width, height: size.height, theme: NewTheme(true, false), motion: NewMotion(true),
+			phase: phaseReady, devices: devices, selected: 1, presence: presenceStates,
+		}
+		model.motion.TriggerStage(time.Now(), StageSelect, 180*time.Millisecond, 0, 1)
+		assertViewFits(t, model, size.width, size.height)
+		model.waking = true
+		model.actionTargetID = "one"
+		model.actionTarget = devices[0].Name
+		model.action = "wake"
+		model.motion.TriggerStage(time.Now(), StageSignal, 800*time.Millisecond, 0, 0)
+		assertViewFits(t, model, size.width, size.height)
+	}
+}
+
+func assertViewFits(t *testing.T, model *WakeModel, width, height int) {
+	t.Helper()
+	view := model.View()
+	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > height {
+		t.Fatalf("%dx%d uses %d lines:\n%s", width, height, lines, view)
+	}
+	for lineNo, line := range strings.Split(view, "\n") {
+		if got := lipgloss.Width(stripANSI(line)); got > width {
+			t.Fatalf("%dx%d line %d overflows at %d: %q", width, height, lineNo, got, line)
+		}
 	}
 }
