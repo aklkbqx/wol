@@ -859,6 +859,32 @@ func TestNightDeskFleetFitsOverflowMatrix(t *testing.T) {
 	}
 }
 
+func TestMachineFormInteractiveTextInput(t *testing.T) {
+	model := &WakeModel{width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false), presence: map[string]string{}}
+	model.beginAdd()
+	if model.form == nil {
+		t.Fatal("form is nil after beginAdd")
+	}
+	for _, ch := range "node-1" {
+		model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+	}
+	if got := model.form.values[0]; got != "node-1" {
+		t.Fatalf("expected form.values[0] = 'node-1', got %q", got)
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if model.form.selected != 1 {
+		t.Fatalf("expected form.selected = 1, got %d", model.form.selected)
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if model.form.selected != 0 {
+		t.Fatalf("expected form.selected = 0, got %d", model.form.selected)
+	}
+	model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if model.form != nil {
+		t.Fatal("expected form to be closed after Esc")
+	}
+}
+
 func assertViewFits(t *testing.T, model *WakeModel, width, height int) {
 	t.Helper()
 	view := model.View()
