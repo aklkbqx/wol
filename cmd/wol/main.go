@@ -52,6 +52,8 @@ func main() {
 		os.Exit(runExport(os.Args[2:]))
 	case "version":
 		printVersion(os.Stdout)
+	case "update":
+		os.Exit(runUpdate(os.Args[2:]))
 	default:
 		usage()
 		os.Exit(2)
@@ -163,6 +165,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  wol doctor       Check the local wake toolchain")
 	fmt.Fprintln(os.Stderr, "  wol import       Import a portable inventory JSON file")
 	fmt.Fprintln(os.Stderr, "  wol export       Export portable inventory JSON")
+	fmt.Fprintln(os.Stderr, "  wol update       Check or install the latest release")
 	fmt.Fprintln(os.Stderr, "  wol version      Print version and credit")
 }
 

@@ -5,19 +5,17 @@ local machine inventory directly from SQLite. Wake and inventory features do
 not require a web application or hosted service.
 
 ```text
-WOL WAKE DESK  v0.4.7  ·  Credit: aklkbqx
-LOCAL INVENTORY  ·  compact
+ wol  checked 05:27:04
 
-1 Machines   2 Routes   3 Activity
+ 3 machines  1 online  1 asleep  1 unknown
 
-FLEET
-  POWER  1 online · 1 offline · 1 unknown
-  WAKE   3 ready · 0 blocked
-  REMOTE 1 configured · 2 setup required
+ › windows     online    stream
+   private     unknown   stream
+   private2    asleep    setup
+ 192.168.50.200  00:11:22:33:44:55  LAN 192.168.50.255:9
 
-› windows       POWER ● ONLINE   WAKE ● READY   REMOTE ● CONFIGURED
-  private       POWER ? UNKNOWN  WAKE ● READY   REMOTE ? SETUP
-  private2      POWER ○ OFFLINE  WAKE ● READY   REMOTE ? SETUP
+
+ enter choose   w wake   c stream   s check   x stop   ? help   q quit
 ```
 
 Power and wake readiness are intentionally separate: `OFFLINE + READY` is the
@@ -61,6 +59,8 @@ wol status windows          # check its current power state
 wol wake AA:BB:CC:DD:EE:FF  # send directly to a MAC address
 wol export --output inventory.json
 wol import inventory.json
+wol update
+wol update --check
 wol version
 ```
 
