@@ -23,14 +23,16 @@ func (m *WakeModel) renderRoutes(width int) string {
 	} else {
 		for i, relay := range m.relays {
 			marker := " "
+			name := fitText(relay.Name, max(4, min(18, width/3)))
 			if i == m.selected {
-				marker = m.theme.Glyph("arrow")
+				marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
+				name = m.theme.accent().Render(name)
 			}
 			state := "ready"
 			if !relay.Enabled {
 				state = "off"
 			}
-			rows = append(rows, fitText(fmt.Sprintf("%s %s  %s  %s:%d", marker, fitText(relay.Name, max(4, min(18, width/3))), state, fitText(relay.Address, max(4, min(16, width/3))), relay.Port), width))
+			rows = append(rows, fitText(fmt.Sprintf("%s %s  %s  %s:%d", marker, name, state, fitText(relay.Address, max(4, min(16, width/3))), relay.Port), width))
 		}
 	}
 	return strings.Join(rows, "\n")
@@ -43,19 +45,39 @@ func (m *WakeModel) renderActivity(width int) string {
 	} else {
 		for i, attempt := range m.history {
 			marker := " "
+			target := fitText(attempt.TargetName, max(4, min(16, width/3)))
 			if i == m.selected {
-				marker = m.theme.Glyph("arrow")
+				marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
+				target = m.theme.accent().Render(target)
 			}
 			when := attempt.CreatedAt
 			if parsed, err := time.Parse(time.RFC3339Nano, attempt.CreatedAt); err == nil {
 				when = parsed.Local().Format("15:04:05")
 			}
-			rows = append(rows, fitText(fmt.Sprintf("%s %s  %s  %s", marker, when, fitText(attempt.TargetName, max(4, min(16, width/3))), strings.ToLower(attempt.PacketStatus)), width))
+			rows = append(rows, fitText(fmt.Sprintf("%s %s  %s  %s", marker, when, target, strings.ToLower(attempt.PacketStatus)), width))
 		}
 	}
 	return strings.Join(rows, "\n")
 }
 
 func (m *WakeModel) footer(width int) string {
-	return fitText(m.theme.muted().Render("enter choose   w wake   c stream   s check   x stop   ? help   q quit"), width)
+	if m.theme.ASCII || width < 48 {
+		return fitText(m.theme.muted().Render("enter choose   w wake   c stream   s check   x stop   ? help   q quit"), width)
+	}
+	shortcuts := []struct{ key, label string }{
+		{"enter", "choose"},
+		{"w", "wake"},
+		{"c", "stream"},
+		{"s", "check"},
+		{"x", "stop"},
+		{"?", "help"},
+		{"q", "quit"},
+	}
+	parts := make([]string, 0, len(shortcuts))
+	for _, s := range shortcuts {
+		k := m.theme.accent().Render(s.key)
+		l := m.theme.muted().Render(s.label)
+		parts = append(parts, k+" "+l)
+	}
+	return fitText(strings.Join(parts, "   "), width)
 }

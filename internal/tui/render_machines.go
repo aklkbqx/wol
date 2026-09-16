@@ -14,17 +14,28 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 	if m.actionPicker {
 		return m.renderActionPicker(devices, width)
 	}
-	if mode == LayoutWide && width >= 110 {
-		leftWidth := (width * 62) / 100
+	showSplit := width >= 76 && m.height >= 18
+	if showSplit {
+		leftWidth := (width * 55) / 100
 		if leftWidth < 36 {
 			leftWidth = 36
 		}
-		rightWidth := width - leftWidth - 2
-		if rightWidth < 28 {
-			rightWidth = 28
-			leftWidth = width - rightWidth - 2
+		rightWidth := width - leftWidth - 1
+		if rightWidth < 26 {
+			rightWidth = 26
+			leftWidth = width - rightWidth - 1
 		}
-		return lipgloss.JoinHorizontal(lipgloss.Top, m.renderMachineList(devices, leftWidth), "  ", m.renderInspector(devices, rightWidth))
+		leftContent := m.renderMachineList(devices, leftWidth-4)
+		rightContent := m.renderInspector(devices, rightWidth-4)
+		leftLines := len(strings.Split(leftContent, "\n"))
+		rightLines := len(strings.Split(rightContent, "\n"))
+		sharedHeight := max(leftLines, rightLines)
+		if m.height >= 26 {
+			sharedHeight = max(sharedHeight, min(12, m.height-14))
+		}
+		leftCard := renderCardBox(m.theme, "◆ FLEET", leftContent, leftWidth, sharedHeight)
+		rightCard := renderCardBox(m.theme, "◆ INSPECTOR", rightContent, rightWidth, sharedHeight)
+		return lipgloss.JoinHorizontal(lipgloss.Top, leftCard, " ", rightCard)
 	}
 	list := m.renderMachineList(devices, width)
 	if target, ok := m.actionDevice(); ok && (m.waking || m.opening) {
@@ -34,6 +45,25 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 		return list + "\n" + m.renderInspector(devices, width)
 	}
 	return list
+}
+
+func joinPanels(left, right, sep string, leftWidth int) string {
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	maxLines := max(len(leftLines), len(rightLines))
+	out := make([]string, maxLines)
+	for i := 0; i < maxLines; i++ {
+		var l, r string
+		if i < len(leftLines) {
+			l = leftLines[i]
+		}
+		if i < len(rightLines) {
+			r = rightLines[i]
+		}
+		pad := max(0, leftWidth-lipgloss.Width(stripANSI(l)))
+		out[i] = l + strings.Repeat(" ", pad) + sep + r
+	}
+	return strings.Join(out, "\n")
 }
 
 func (m *WakeModel) renderMachineList(devices []store.Device, width int) string {
@@ -90,7 +120,8 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 	if below := len(devices) - (start + len(visible)); below > 0 {
 		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("%d below", below)))
 	}
-	if selected, ok := m.selectedDevice(devices); ok && width >= 40 {
+	showSplit := m.width >= 76 && m.height >= 18
+	if selected, ok := m.selectedDevice(devices); ok && width >= 40 && !showSplit {
 		rows = append(rows, "", m.theme.muted().Render(fitText(selected.IPAddress+"  "+selected.MACAddress+"  "+m.routeText(selected), rowWidth)))
 	}
 	return strings.Join(rows, "\n")

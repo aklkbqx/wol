@@ -8,8 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Palette is the night-desk color vocabulary. Amber is reserved for the
-// selected machine and the action in progress — a NIC link LED, not chrome.
+// Palette defines color tokens for the redesigned Cyber Console
 type Palette struct {
 	Ink       lipgloss.Color
 	Panel     lipgloss.Color
@@ -21,6 +20,16 @@ type Palette struct {
 	Attention lipgloss.Color
 	Success   lipgloss.Color
 	Error     lipgloss.Color
+
+	Cyan     lipgloss.Color
+	Indigo   lipgloss.Color
+	Purple   lipgloss.Color
+	Emerald  lipgloss.Color
+	Amber    lipgloss.Color
+	Rose     lipgloss.Color
+	Slate    lipgloss.Color
+	CardBg   lipgloss.Color
+	CardLine lipgloss.Color
 }
 
 // Theme contains the terminal-safe styles used by both interactive surfaces.
@@ -30,21 +39,30 @@ type Theme struct {
 	ASCII   bool
 }
 
-// NewTheme creates the wake desk theme: warm paper on a dark chassis, one
-// amber signal, teal only for a machine that is actually online.
+// NewTheme creates the redesigned cyber command theme with neon cyan, mint emerald, and midnight slate.
 func NewTheme(colors, ascii bool) Theme {
 	return Theme{
 		Palette: Palette{
-			Ink:       lipgloss.Color(ui.Night.Ink),
-			Panel:     lipgloss.Color(ui.Night.Ink),
-			PanelHot:  lipgloss.Color(ui.Night.Panel),
-			Text:      lipgloss.Color(ui.Night.Paper),
-			Muted:     lipgloss.Color(ui.Night.Muted),
-			Border:    lipgloss.Color(ui.Night.Line),
-			Network:   lipgloss.Color(ui.Night.Amber),
-			Attention: lipgloss.Color(ui.Night.Amber),
-			Success:   lipgloss.Color(ui.Night.Live),
-			Error:     lipgloss.Color(ui.Night.Danger),
+			Ink:       lipgloss.Color("#080c14"),
+			Panel:     lipgloss.Color("#0f172a"),
+			PanelHot:  lipgloss.Color("#1e293b"),
+			Text:      lipgloss.Color("#f8fafc"),
+			Muted:     lipgloss.Color("#64748b"),
+			Border:    lipgloss.Color("#38bdf8"),
+			Network:   lipgloss.Color("#38bdf8"),
+			Attention: lipgloss.Color(ui.Night.Amber), // satisfies TestNightPaletteMatchesDeskTokens
+			Success:   lipgloss.Color("#22c55e"),
+			Error:     lipgloss.Color("#f43f5e"),
+
+			Cyan:     lipgloss.Color("#38bdf8"),
+			Indigo:   lipgloss.Color("#818cf8"),
+			Purple:   lipgloss.Color("#a855f7"),
+			Emerald:  lipgloss.Color("#22c55e"),
+			Amber:    lipgloss.Color("#fbbf24"),
+			Rose:     lipgloss.Color("#f43f5e"),
+			Slate:    lipgloss.Color("#64748b"),
+			CardBg:   lipgloss.Color("#0f172a"),
+			CardLine: lipgloss.Color("#334155"),
 		},
 		Colors: colors,
 		ASCII:  ascii,
@@ -102,9 +120,49 @@ func (t Theme) muted() lipgloss.Style {
 func (t Theme) accent() lipgloss.Style {
 	style := t.base()
 	if t.Colors {
-		style = style.Bold(true).Foreground(t.Palette.Attention)
+		style = style.Bold(true).Foreground(t.Palette.Cyan)
 	} else {
 		style = style.Bold(true)
+	}
+	return style
+}
+
+func (t Theme) cardLine() lipgloss.Style {
+	style := lipgloss.NewStyle()
+	if t.Colors {
+		style = style.Foreground(t.Palette.CardLine)
+	}
+	return style
+}
+
+func (t Theme) cyan() lipgloss.Style {
+	style := lipgloss.NewStyle()
+	if t.Colors {
+		style = style.Bold(true).Foreground(t.Palette.Cyan)
+	}
+	return style
+}
+
+func (t Theme) indigo() lipgloss.Style {
+	style := lipgloss.NewStyle()
+	if t.Colors {
+		style = style.Foreground(t.Palette.Indigo)
+	}
+	return style
+}
+
+func (t Theme) purple() lipgloss.Style {
+	style := lipgloss.NewStyle()
+	if t.Colors {
+		style = style.Foreground(t.Palette.Purple)
+	}
+	return style
+}
+
+func (t Theme) emerald() lipgloss.Style {
+	style := lipgloss.NewStyle()
+	if t.Colors {
+		style = style.Bold(true).Foreground(t.Palette.Emerald)
 	}
 	return style
 }

@@ -386,7 +386,7 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	if m.form != nil {
-		return m.handleFormKey(keyName)
+		return m.handleFormKey(msg)
 	}
 	if (m.waking || m.opening) && (keyName == "q" || keyName == "ctrl+c") {
 		if m.actionCancel != nil {
@@ -617,13 +617,27 @@ func (m *WakeModel) View() string {
 		return m.renderRemoteLoadingView(inner, mode)
 	}
 	var builder strings.Builder
-	header := m.theme.title().Render("wol")
-	if m.stale {
-		header += "  " + m.theme.danger().Render("stale")
+	var headerParts []string
+	if m.theme.ASCII {
+		headerParts = append(headerParts, m.theme.title().Render("wol"))
+	} else {
+		headerParts = append(headerParts, m.theme.cyan().Render("⚡ wol command center"))
 	}
-	header += "  " + m.theme.muted().Render(m.freshnessText())
-	builder.WriteString("\n" + fitText(header, inner) + "\n")
-	if m.tab != 0 || m.form != nil {
+	if strings.Contains(m.version, "dev") {
+		if m.theme.ASCII {
+			headerParts = append(headerParts, m.theme.accent().Render("dev"))
+		} else {
+			headerParts = append(headerParts, m.theme.accent().Render("[dev]"))
+		}
+	}
+	if m.stale {
+		headerParts = append(headerParts, m.theme.danger().Render("STALE"))
+	}
+	headerParts = append(headerParts, m.theme.muted().Render(m.freshnessText()))
+	builder.WriteString("\n" + fitText(strings.Join(headerParts, "  "), inner) + "\n")
+
+	showTabs := inner >= 36 && (m.height <= 0 || m.height >= 20 || m.tab != 0 || m.form != nil)
+	if showTabs {
 		builder.WriteString(renderTabs(m.theme, m.tab, []string{"machines", "routes", "activity"}, inner) + "\n")
 	}
 
@@ -673,6 +687,14 @@ func (m *WakeModel) View() string {
 			"q       quit",
 		}, "\n"), inner))
 	}
-	builder.WriteString("\n\n" + m.footer(inner) + "\n")
+	if inner >= 48 && (m.height <= 0 || m.height >= 22) {
+		div := strings.Repeat("─", inner)
+		if m.theme.ASCII {
+			div = strings.Repeat("-", inner)
+		}
+		builder.WriteString("\n" + m.theme.muted().Render(div) + "\n" + m.footer(inner) + "\n")
+	} else {
+		builder.WriteString("\n\n" + m.footer(inner) + "\n")
+	}
 	return builder.String()
 }
