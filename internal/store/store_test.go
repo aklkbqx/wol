@@ -263,6 +263,23 @@ func TestRemoteProfileCRUDValidationAndDeviceCleanup(t *testing.T) {
 	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, CertificatePolicy: "ignore-all", Enabled: true}); err == nil {
 		t.Fatal("unknown certificate policy must be rejected")
 	}
+	sunshineProfile, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{
+		DeviceID:    device.ID,
+		Protocol:    "sunshine",
+		FPS:         120,
+		Resolution:  "2560x1440",
+		BitrateKbps: 50000,
+		Enabled:     true,
+	})
+	if err != nil {
+		t.Fatalf("sunshine profile upsert failed: %v", err)
+	}
+	if sunshineProfile.Protocol != "sunshine" || sunshineProfile.Port != 47989 || sunshineProfile.VerifyPort != 47989 || sunshineProfile.Mode != "native-moonlight" || sunshineProfile.AppName != "Desktop" || sunshineProfile.FPS != 120 || sunshineProfile.Resolution != "2560x1440" || sunshineProfile.BitrateKbps != 50000 {
+		t.Fatalf("sunshine profile defaults were not normalized: %+v", sunshineProfile)
+	}
+	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "sunshine", Resolution: "invalid-res", Enabled: true}); err == nil {
+		t.Fatal("invalid resolution format must be rejected")
+	}
 	if err := repository.DeleteDevice(t.Context(), device.ID); err != nil {
 		t.Fatal(err)
 	}

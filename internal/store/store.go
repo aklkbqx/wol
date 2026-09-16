@@ -189,6 +189,10 @@ CREATE TABLE IF NOT EXISTS remote_profiles (
   domain_hint TEXT NOT NULL DEFAULT '',
   certificate_policy TEXT NOT NULL DEFAULT 'strict',
   mode TEXT NOT NULL DEFAULT 'browser-local',
+  app_name TEXT NOT NULL DEFAULT '',
+  fps INTEGER NOT NULL DEFAULT 0,
+  resolution TEXT NOT NULL DEFAULT '',
+  bitrate_kbps INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -217,6 +221,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		{table: "wake_relays", name: "ssh_user", def: "TEXT NOT NULL DEFAULT ''"},
 		{table: "remote_profiles", name: "domain_hint", def: "TEXT NOT NULL DEFAULT ''"},
 		{table: "remote_profiles", name: "certificate_policy", def: "TEXT NOT NULL DEFAULT 'strict'"},
+		{table: "remote_profiles", name: "app_name", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "remote_profiles", name: "fps", def: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "remote_profiles", name: "resolution", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "remote_profiles", name: "bitrate_kbps", def: "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, column.table, column.name, column.def); err != nil {
 			return err
@@ -280,7 +288,7 @@ func (s *Store) migrateRemoteProfiles(ctx context.Context) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if columns["mode"] && columns["domain_hint"] && columns["certificate_policy"] && !columns["name"] && !columns["domain"] && !columns["credential_mode"] {
+	if columns["mode"] && columns["domain_hint"] && columns["certificate_policy"] && columns["app_name"] && !columns["name"] && !columns["domain"] && !columns["credential_mode"] {
 		return nil
 	}
 	domainSource := "domain_hint"
@@ -309,15 +317,19 @@ CREATE TABLE remote_profiles (
   domain_hint TEXT NOT NULL DEFAULT '',
   certificate_policy TEXT NOT NULL DEFAULT 'strict',
   mode TEXT NOT NULL DEFAULT 'browser-local',
+  app_name TEXT NOT NULL DEFAULT '',
+  fps INTEGER NOT NULL DEFAULT 0,
+  resolution TEXT NOT NULL DEFAULT '',
+  bitrate_kbps INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
 );
-INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, enabled, created_at, updated_at)
+INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, app_name, fps, resolution, bitrate_kbps, enabled, created_at, updated_at)
 SELECT id, device_id, protocol, host, port,
        CASE WHEN verify_port > 0 THEN verify_port ELSE port END,
-       username_hint, %s, 'strict', 'browser-local', enabled, created_at, updated_at
+       username_hint, %s, 'strict', 'browser-local', '', 0, '', 0, enabled, created_at, updated_at
 FROM remote_profiles_legacy_v032
 WHERE rowid IN (SELECT MAX(rowid) FROM remote_profiles_legacy_v032 GROUP BY device_id);
 DROP TABLE remote_profiles_legacy_v032;

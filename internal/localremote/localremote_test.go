@@ -21,7 +21,24 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aklkbqx/wol/internal/ui"
 )
+
+// grabCanonical is the frozen Guacamole focus helper. Edits inside this
+// substring are forbidden; the session page must contain it byte-for-byte.
+const grabCanonical = `function grab(){
+  f.focus();
+  try{
+    if(f.contentWindow) f.contentWindow.focus();
+    const d=f.contentDocument;
+    if(!d) return;
+    const el=d.querySelector('canvas,.display,.guacamole-viewer')||d.body;
+    if(!el) return;
+    if(el.tabIndex<0) el.tabIndex=0;
+    el.focus();
+  }catch(e){}
+}`
 
 type fakeRunner struct {
 	mu       sync.Mutex
@@ -236,7 +253,7 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	body, _ := io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "WOL LOCAL REMOTE") || !strings.Contains(string(body), "desktop-user") || !strings.Contains(string(body), `name="csrf" value="csrf"`) || strings.Contains(string(body), "/guacamole/?data=") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "wol") || !strings.Contains(string(body), "desktop-user") || !strings.Contains(string(body), `name="csrf" value="csrf"`) || !strings.Contains(string(body), "Connect") || !strings.Contains(string(body), `class="login"`) || !strings.Contains(string(body), "is-sending") || !strings.Contains(string(body), "signal-travel") || !strings.Contains(string(body), ui.Night.Amber) || strings.Contains(string(body), "/guacamole/?data=") {
 		t.Fatalf("page status/body = %d %q", response.StatusCode, body)
 	}
 	if strings.Contains(response.Header.Get("Content-Security-Policy"), "unsafe-eval") {
@@ -279,8 +296,14 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	}
 	body, _ = io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "/guacamole/?data=") || !strings.Contains(string(body), `action="/disconnect"`) || !strings.Contains(string(body), `name="csrf" value="csrf"`) || strings.Contains(string(body), "session-only") || strings.Contains(string(body), "Connected through localhost") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "/guacamole/?data=") || !strings.Contains(string(body), `action="/disconnect"`) || !strings.Contains(string(body), `name="csrf" value="csrf"`) || !strings.Contains(string(body), `tabindex="0"`) || !strings.Contains(string(body), "Switch account") || !strings.Contains(string(body), "Connecting") || !strings.Contains(string(body), grabCanonical) || !strings.Contains(string(body), "iframe.ready") || !strings.Contains(string(body), "pointer-events:auto") || !strings.Contains(string(body), "contentWindow.focus") || !strings.Contains(string(body), "signal-travel") || !strings.Contains(string(body), `document.querySelector('header')?.classList.remove('is-waiting');`) || strings.Contains(string(body), "session-only") || strings.Contains(string(body), "Connected through localhost") {
 		t.Fatalf("remote page status/body = %d %q", response.StatusCode, body)
+	}
+	onload := between(string(body), "f.onload=()=>{", "};")
+	removeIdx := strings.Index(onload, `document.querySelector('header')?.classList.remove('is-waiting');`)
+	firstGrab := strings.Index(onload, "grab();")
+	if removeIdx < 0 || firstGrab < 0 || removeIdx > firstGrab {
+		t.Fatalf("is-waiting remove must sit above grab() calls: %q", onload)
 	}
 
 	// Guacamole iframe/tunnel requests may use an opaque Origin. They remain
@@ -414,7 +437,7 @@ func TestBrowserDisconnectClosesBrokerAndDockerResources(t *testing.T) {
 	}
 	body, _ = io.ReadAll(response.Body)
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Remote disconnected") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), "Remote disconnected") || !strings.Contains(string(body), `class="closed"`) {
 		t.Fatalf("disconnect status/body = %d %q", response.StatusCode, body)
 	}
 
@@ -573,4 +596,17 @@ func TestOpenFailureCleansUp(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no browser") || len(runner.snapshot()) != 9 {
 		t.Fatalf("error/commands = %v %#v", err, runner.snapshot())
 	}
+}
+
+func between(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i < 0 {
+		return ""
+	}
+	i += len(start)
+	j := strings.Index(s[i:], end)
+	if j < 0 {
+		return ""
+	}
+	return s[i : i+j]
 }

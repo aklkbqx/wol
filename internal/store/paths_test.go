@@ -33,19 +33,4 @@ func TestDefaultDataDirAndDatabasePath(t *testing.T) {
 	if got := DefaultDatabasePath(); got != customDB {
 		t.Fatalf("DefaultDatabasePath() with WOL_DB = %q, want %q", got, customDB)
 	}
-
-	// 4. Test WOL_TARGET_DB override
-	customTarget := filepath.Join(tempDir, "target.db")
-	t.Setenv("WOL_TARGET_DB", customTarget)
-	if got := DefaultMigrationTargetDB(); got != customTarget {
-		t.Fatalf("DefaultMigrationTargetDB() with WOL_TARGET_DB = %q, want %q", got, customTarget)
-	}
-}
-
-func TestDefaultWebDir(t *testing.T) {
-	tempDir := t.TempDir()
-	t.Setenv("WOL_WEB_DIR", tempDir)
-	if got := DefaultWebDir(); got != tempDir {
-		t.Fatalf("DefaultWebDir() = %q, want %q", got, tempDir)
-	}
 }

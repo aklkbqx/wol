@@ -76,3 +76,31 @@ func TestRunRemoteNoWakeIsExplicit(t *testing.T) {
 		t.Fatalf("exit = %d, auto wake = %v", code, fake.wake)
 	}
 }
+
+func TestRunRemoteConfigureSunshine(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "wol.db")
+	repository, err := store.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := repository.CreateDevice(t.Context(), store.Device{Name: "gaming-rig", MACAddress: "02:00:00:00:00:99", IPAddress: "192.168.1.100", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.Close()
+
+	if code := runRemote([]string{"configure", "--db", databasePath, "--protocol", "sunshine", "--fps", "120", "--res", "2560x1440", "--app", "Desktop", "gaming-rig"}); code != 0 {
+		t.Fatalf("remote configure exit code = %d", code)
+	}
+
+	repository, err = store.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := repository.GetRemoteProfile(t.Context(), device.ID)
+	repository.Close()
+	if err != nil || profile.Protocol != "sunshine" || profile.Port != 47989 || profile.Mode != "native-moonlight" || profile.FPS != 120 || profile.Resolution != "2560x1440" || profile.AppName != "Desktop" {
+		t.Fatalf("unexpected profile: %+v, err: %v", profile, err)
+	}
+}
+

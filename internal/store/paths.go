@@ -34,39 +34,3 @@ func DefaultDatabasePath() string {
 	}
 	return filepath.Join(DefaultDataDir(), "wol.db")
 }
-
-// DefaultMigrationTargetDB returns the default migration target SQLite path.
-func DefaultMigrationTargetDB() string {
-	if db := strings.TrimSpace(os.Getenv("WOL_TARGET_DB")); db != "" {
-		return filepath.Clean(db)
-	}
-	return filepath.Join(DefaultDataDir(), "migration-target.db")
-}
-
-// DefaultWebDir returns the candidate directory for static web assets.
-func DefaultWebDir() string {
-	if dir := strings.TrimSpace(os.Getenv("WOL_WEB_DIR")); dir != "" {
-		return filepath.Clean(dir)
-	}
-	if info, err := os.Stat("web/build"); err == nil && info.IsDir() {
-		return "web/build"
-	}
-	if execPath, err := os.Executable(); err == nil {
-		execDir := filepath.Dir(execPath)
-		candidate := filepath.Join(execDir, "web", "build")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-		candidate = filepath.Join(execDir, "web-build")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-	}
-	if dataDir := DefaultDataDir(); dataDir != "" {
-		candidate := filepath.Join(dataDir, "web")
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			return candidate
-		}
-	}
-	return "web/build"
-}
