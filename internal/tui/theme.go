@@ -4,11 +4,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aklkbqx/wol/internal/ui"
 	"github.com/charmbracelet/lipgloss"
 )
 
-// Palette is the shared Signal Desk color vocabulary. Each token has one
-// semantic job so status remains understandable without relying on decoration.
+// Palette is the night-desk color vocabulary. Amber is reserved for the
+// selected machine and the action in progress — a NIC link LED, not chrome.
 type Palette struct {
 	Ink       lipgloss.Color
 	Panel     lipgloss.Color
@@ -29,21 +30,21 @@ type Theme struct {
 	ASCII   bool
 }
 
-// NewTheme creates the WOL Signal Desk theme. The palette intentionally avoids
-// gradients and glow effects: contrast and a single signal rail carry status.
+// NewTheme creates the wake desk theme: warm paper on a dark chassis, one
+// amber signal, teal only for a machine that is actually online.
 func NewTheme(colors, ascii bool) Theme {
 	return Theme{
 		Palette: Palette{
-			Ink:       lipgloss.Color("#0D131B"),
-			Panel:     lipgloss.Color("#16212B"),
-			PanelHot:  lipgloss.Color("#1D2C38"),
-			Text:      lipgloss.Color("#E7EEF5"),
-			Muted:     lipgloss.Color("#8FA2B3"),
-			Border:    lipgloss.Color("#304452"),
-			Network:   lipgloss.Color("#4FD1C5"),
-			Attention: lipgloss.Color("#F4B942"),
-			Success:   lipgloss.Color("#9ED47A"),
-			Error:     lipgloss.Color("#F26D6D"),
+			Ink:       lipgloss.Color(ui.Night.Ink),
+			Panel:     lipgloss.Color(ui.Night.Ink),
+			PanelHot:  lipgloss.Color(ui.Night.Panel),
+			Text:      lipgloss.Color(ui.Night.Paper),
+			Muted:     lipgloss.Color(ui.Night.Muted),
+			Border:    lipgloss.Color(ui.Night.Line),
+			Network:   lipgloss.Color(ui.Night.Amber),
+			Attention: lipgloss.Color(ui.Night.Amber),
+			Success:   lipgloss.Color(ui.Night.Live),
+			Error:     lipgloss.Color(ui.Night.Danger),
 		},
 		Colors: colors,
 		ASCII:  ascii,
@@ -83,8 +84,9 @@ func (t Theme) base() lipgloss.Style {
 func (t Theme) title() lipgloss.Style {
 	style := t.base()
 	if t.Colors {
+		style = style.Bold(true).Foreground(t.Palette.Text)
+	} else {
 		style = style.Bold(true)
-		style = style.Foreground(t.Palette.Network)
 	}
 	return style
 }
@@ -100,8 +102,9 @@ func (t Theme) muted() lipgloss.Style {
 func (t Theme) accent() lipgloss.Style {
 	style := t.base()
 	if t.Colors {
+		style = style.Bold(true).Foreground(t.Palette.Attention)
+	} else {
 		style = style.Bold(true)
-		style = style.Foreground(t.Palette.Attention)
 	}
 	return style
 }
@@ -109,7 +112,6 @@ func (t Theme) accent() lipgloss.Style {
 func (t Theme) success() lipgloss.Style {
 	style := t.base()
 	if t.Colors {
-		style = style.Bold(true)
 		style = style.Foreground(t.Palette.Success)
 	}
 	return style
@@ -118,7 +120,6 @@ func (t Theme) success() lipgloss.Style {
 func (t Theme) danger() lipgloss.Style {
 	style := t.base()
 	if t.Colors {
-		style = style.Bold(true)
 		style = style.Foreground(t.Palette.Error)
 	}
 	return style
@@ -128,9 +129,6 @@ func (t Theme) panel(width int) lipgloss.Style {
 	style := lipgloss.NewStyle().Padding(0, 1)
 	if width > 0 {
 		style = style.Width(width)
-	}
-	if t.Colors {
-		style = style.Border(lipgloss.NormalBorder()).BorderForeground(t.Palette.Border)
 	}
 	return style
 }
@@ -155,26 +153,34 @@ func (t Theme) Glyph(name string) string {
 		case "check":
 			return "OK"
 		case "cross":
-			return "!!"
+			return "x"
+		case "rail":
+			return "-"
+		case "afterimage":
+			return "."
 		}
 	}
 	switch name {
 	case "signal-ready":
 		return "●"
 	case "signal-busy":
-		return "◐"
+		return "·"
 	case "signal-failed":
 		return "!"
 	case "signal-stopped":
 		return "○"
 	case "bullet":
-		return "•"
+		return "·"
 	case "arrow":
 		return "›"
 	case "check":
 		return "✓"
 	case "cross":
 		return "×"
+	case "rail":
+		return "─"
+	case "afterimage":
+		return "·"
 	default:
 		return " "
 	}

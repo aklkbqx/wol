@@ -1,0 +1,144 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/aklkbqx/wol/internal/store"
+)
+
+func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
+	if len(devices) == 0 {
+		return m.theme.muted().Render("add a machine to start")
+	}
+	device, _ := m.selectedDevice(devices)
+	if m.actionPicker {
+		return m.renderActionPicker(devices, width)
+	}
+	active := m.waking || m.opening
+	rowWidth := max(1, width)
+	power := powerWord(m.deviceState(device))
+	wake := m.wakeCapability(device)
+	action := m.actionWord(device)
+	lock := ""
+	if active {
+		lock = "locked · "
+	}
+	lines := []string{
+		m.theme.muted().Render(lock + "selected"),
+		m.theme.title().Render(fitText(device.Name, rowWidth)),
+		fitText(power+"  "+action, rowWidth),
+		m.theme.muted().Render(fitText(wake.detail, rowWidth)),
+	}
+	if active {
+		lines = append(lines, m.renderSignalPath(device, rowWidth), m.theme.muted().Render("esc cancel"))
+	} else {
+		lines = append(lines, m.theme.muted().Render("enter  wake or stream"))
+	}
+	lines = append(lines,
+		"",
+		m.theme.muted().Render(fitText(device.IPAddress, rowWidth)),
+		m.theme.muted().Render(fitText(device.MACAddress, rowWidth)),
+		m.theme.muted().Render(fitText(m.routeText(device), rowWidth)),
+	)
+	return strings.Join(lines, "\n")
+}
+
+func (m *WakeModel) renderActionPicker(devices []store.Device, width int) string {
+	if len(devices) == 0 {
+		return "no machine selected"
+	}
+	device := devices[min(m.selected, len(devices)-1)]
+	remoteLabel := "remote"
+	if profile, ok := m.profiles[device.ID]; ok && streamProfile(profile) {
+		remoteLabel = "stream"
+	} else if _, ok := m.profiles[device.ID]; !ok {
+		remoteLabel = "stream"
+	}
+	items := []struct{ key, label string }{
+		{"w", "wake"},
+		{"c", remoteLabel},
+		{"s", "check"},
+		{"esc", "cancel"},
+	}
+	rows := []string{m.theme.title().Render(fitText(device.Name, max(1, width))), ""}
+	for i, item := range items {
+		marker := " "
+		label := item.label
+		if i == m.pickerSelected {
+			marker = m.theme.Glyph("arrow")
+			label = m.theme.accent().Render(label)
+		}
+		rows = append(rows, fitText(fmt.Sprintf("%s %s", marker, label), max(1, width)))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m *WakeModel) renderSignalPath(device store.Device, width int) string {
+	if m.action == "wake-remote" {
+		last := "REMOTE"
+		if profile, ok := m.profiles[device.ID]; ok && streamProfile(profile) {
+			last = "STREAM"
+		}
+		return m.renderActionPath([]string{"WAKE", "WAIT", last}, width)
+	}
+	route := "LAN"
+	if strings.EqualFold(device.WakeStrategy, "relay") || device.WakeRelayID != "" {
+		route = "RELAY"
+	}
+	return m.renderActionPath([]string{"DESK", route, strings.ToUpper(fitText(device.Name, 12))}, width)
+}
+
+func (m *WakeModel) pathPositionAt(now time.Time) int {
+	if !m.motion.Enabled {
+		return 0
+	}
+	if m.waking || m.opening {
+		if !m.motion.Active(now) {
+			return 2
+		}
+		t := m.motion.T(now)
+		if t < 1.0/3 {
+			return 0
+		}
+		if t < 2.0/3 {
+			return 1
+		}
+		return 2
+	}
+	if m.motion.Active(now) {
+		t := m.motion.T(now)
+		if t < 1.0/3 {
+			return 0
+		}
+		if t < 2.0/3 {
+			return 1
+		}
+		return 2
+	}
+	return 0
+}
+
+func signalPath(steps []string, position int, ascii bool) string {
+	connector, pulse := "──", "●"
+	if ascii {
+		connector, pulse = "--", "*"
+	}
+	left, right := connector+">", connector+">"
+	name := steps[2]
+	switch position {
+	case 1:
+		right = pulse + connector + ">"
+	case 2:
+		name = pulse + name
+	default:
+		left = pulse + connector + ">"
+	}
+	return steps[0] + " " + left + " " + steps[1] + " " + right + " " + name
+}
+
+func (m *WakeModel) renderActionPath(steps []string, width int) string {
+	path := signalPath(steps, m.pathPositionAt(time.Now()), m.theme.ASCII)
+	return fitText(m.theme.accent().Render(path), width)
+}
