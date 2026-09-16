@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aklkbqx/wol/internal/moonlight"
 	config "github.com/aklkbqx/wol/internal/networkconfig"
 	"github.com/aklkbqx/wol/internal/ui"
 )
@@ -63,6 +64,13 @@ func RunDoctorWithEnv(rootDir string, defaults []string) *DoctorReport {
 		} else {
 			add("Toolchain", t.name, "WARN", "Not found in PATH")
 		}
+	}
+
+	// Moonlight client check
+	if moonClient, err := moonlight.Detect(); err == nil {
+		add("Toolchain", "Moonlight Client", "OK", moonClient.ExecutablePath)
+	} else {
+		add("Toolchain", "Moonlight Client", "WARN", "Not installed (https://moonlight-stream.org)")
 	}
 
 	// 2. Local ZeroTier Daemon Status

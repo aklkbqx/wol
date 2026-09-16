@@ -22,20 +22,21 @@ type Opener func(context.Context, string) error
 
 // Config describes a single local browser-remote session.
 type Config struct {
+	Name              string
 	Protocol          string
 	Host              string
 	Port              int
 	UsernameHint      string
 	DomainHint        string
 	CertificatePolicy string
+	Vault             Vault
 	Runner            Runner
 	Opener            Opener
 	OpenBrowser       bool
 }
 
-// Credentials live only in the loopback broker for the few milliseconds needed
-// to build an encrypted, short-lived Guacamole launch token. They are never
-// persisted by WOL.
+// Credentials are used to build a short-lived Guacamole launch token.
+// Optional "remember" copies them into the OS keychain, never into SQLite.
 type Credentials struct {
 	Username string
 	Domain   string
@@ -265,7 +266,7 @@ func (b *brokerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.URL.Path == "/session":
-		serveLoginPage(w, b.config, b.formToken, "")
+		b.serveSession(w, r)
 	case r.URL.Path == "/connect":
 		b.connect(w, r)
 	case r.URL.Path == "/remote":
@@ -308,6 +309,59 @@ func (b *brokerHandler) validFormToken(presented string) bool {
 	return len(presented) == len(b.formToken) && subtle.ConstantTimeCompare([]byte(presented), []byte(b.formToken)) == 1
 }
 
+func (b *brokerHandler) serveSession(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("manual") == "1" {
+		serveLoginPage(w, b.config, b.formToken, "")
+		return
+	}
+	saved, ok := b.savedCredentials()
+	if !ok {
+		serveLoginPage(w, b.config, b.formToken, "")
+		return
+	}
+	if err := b.beginRemote(saved); err != nil {
+		serveLoginPage(w, b.config, b.formToken, "Saved sign-in could not be used. Please sign in again.")
+		return
+	}
+	http.Redirect(w, r, "/remote", http.StatusSeeOther)
+}
+
+func (b *brokerHandler) savedCredentials() (Credentials, bool) {
+	if b.config.Vault == nil {
+		return Credentials{}, false
+	}
+	saved, err := b.config.Vault.Get(VaultKey(b.config.Protocol, b.config.Host, b.config.Port))
+	if err != nil {
+		return Credentials{}, false
+	}
+	if err := validateCredentials(b.config.Protocol, saved); err != nil {
+		return Credentials{}, false
+	}
+	switch b.config.Protocol {
+	case "ssh":
+		return saved, saved.Username != ""
+	case "vnc":
+		return saved, saved.Password != ""
+	default:
+		return saved, saved.Username != "" && saved.Password != ""
+	}
+}
+
+func (b *brokerHandler) beginRemote(credentials Credentials) error {
+	if err := validateCredentials(b.config.Protocol, credentials); err != nil {
+		return err
+	}
+	token, err := buildAuthToken(b.key, b.config, credentials, time.Now())
+	credentials.Password = ""
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	b.launchToken = token
+	b.mu.Unlock()
+	return nil
+}
+
 func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed.", http.StatusMethodNotAllowed)
@@ -323,24 +377,47 @@ func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid local sign-in token.", http.StatusForbidden)
 		return
 	}
+	if r.Form.Get("action") == "forget" {
+		if b.config.Vault != nil {
+			_ = b.config.Vault.Delete(VaultKey(b.config.Protocol, b.config.Host, b.config.Port))
+		}
+		serveLoginPage(w, b.config, b.formToken, "Saved sign-in removed.")
+		return
+	}
 	credentials := Credentials{
 		Username: strings.TrimSpace(r.Form.Get("username")),
 		Domain:   strings.TrimSpace(r.Form.Get("domain")),
 		Password: r.Form.Get("password"),
 	}
+	key := VaultKey(b.config.Protocol, b.config.Host, b.config.Port)
+	if credentials.Password == "" && b.config.Vault != nil {
+		if saved, err := b.config.Vault.Get(key); err == nil {
+			if credentials.Username == "" {
+				credentials.Username = saved.Username
+			}
+			if credentials.Domain == "" {
+				credentials.Domain = saved.Domain
+			}
+			credentials.Password = saved.Password
+		}
+	}
 	if err := validateCredentials(b.config.Protocol, credentials); err != nil {
 		serveLoginPage(w, b.config, b.formToken, err.Error())
 		return
 	}
-	launchToken, err := buildAuthToken(b.key, b.config, credentials, time.Now())
-	credentials.Password = ""
-	if err != nil {
+	if b.config.Vault != nil {
+		if r.Form.Get("remember") == "1" {
+			_ = b.config.Vault.Put(key, credentials)
+		} else {
+			_ = b.config.Vault.Delete(key)
+		}
+	}
+	if err := b.beginRemote(credentials); err != nil {
+		credentials.Password = ""
 		http.Error(w, "Unable to prepare the encrypted local session.", http.StatusInternalServerError)
 		return
 	}
-	b.mu.Lock()
-	b.launchToken = launchToken
-	b.mu.Unlock()
+	credentials.Password = ""
 	http.Redirect(w, r, "/remote", http.StatusSeeOther)
 }
 
@@ -369,7 +446,7 @@ func (b *brokerHandler) remote(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/session", http.StatusSeeOther)
 		return
 	}
-	servePage(w, launchToken, b.formToken)
+	servePage(w, launchToken, b.formToken, b.config)
 }
 
 func (b *brokerHandler) consume(w http.ResponseWriter, r *http.Request) {
