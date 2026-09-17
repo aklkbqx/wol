@@ -52,7 +52,7 @@ func SendEtherwake(ctx context.Context, relay store.WakeRelay, mac net.HardwareA
 	if port != 22 {
 		args = append(args, "-p", strconv.Itoa(port))
 	}
-	args = append(args, target, remote)
+	args = append(args, "--", target, remote)
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	output, err := exec.CommandContext(callCtx, "ssh", args...).CombinedOutput()
@@ -67,7 +67,7 @@ func SendEtherwake(ctx context.Context, relay store.WakeRelay, mac net.HardwareA
 }
 
 func safeSSHToken(value string) bool {
-	if value == "" {
+	if value == "" || strings.HasPrefix(value, "-") {
 		return false
 	}
 	for _, r := range value {

@@ -73,6 +73,10 @@ func runShutdown(arguments []string) int {
 			fmt.Fprintf(os.Stderr, "invalid delay %q (expected format like 15m, 1h, 30s): %v\n", *delayStr, err)
 			return 2
 		}
+		if parsed < 0 {
+			fmt.Fprintf(os.Stderr, "invalid delay %q: delay cannot be negative\n", *delayStr)
+			return 2
+		}
 		delay = parsed
 	} else if !*now && delay == 0 {
 		// Default is immediate
@@ -222,8 +226,12 @@ func runShutdownStatus(arguments []string) int {
 		if a.Message != "" {
 			detail += fmt.Sprintf(" · %s", a.Message)
 		}
+		created := a.CreatedAt
+		if len(created) >= 19 {
+			created = created[:19]
+		}
 		rows = append(rows, []string{
-			fmt.Sprintf("[%s] %s", a.CreatedAt[:19], a.DeviceName),
+			fmt.Sprintf("[%s] %s", created, a.DeviceName),
 			fmt.Sprintf("%s  %s", statusBadge, ui.StyleMuted.Render(detail)),
 		})
 	}

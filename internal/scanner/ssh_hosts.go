@@ -11,13 +11,13 @@ import (
 func GetKnownSSHHosts() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return []string{"router", "private", "private2", "macbook"}
+		return nil
 	}
 
 	configPath := filepath.Join(home, ".ssh", "config")
 	f, err := os.Open(configPath)
 	if err != nil {
-		return []string{"router", "private", "private2", "macbook"}
+		return nil
 	}
 	defer f.Close()
 

@@ -77,7 +77,7 @@ func Send(ctx context.Context, request SendRequest) (SendResult, error) {
 	}
 	localAddress, err := localIPv4(request.Interface)
 	if err != nil {
-		return SendResult{}, err
+		localAddress = net.IPv4zero
 	}
 	conn, err := listenUDP(ctx, localAddress)
 	if err != nil {

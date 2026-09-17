@@ -128,10 +128,14 @@ func DefaultSSHRunner(ctx context.Context, target Target, command string) (strin
 	}
 
 	if target.KeyPath != "" {
-		args = append(args, "-i", target.KeyPath)
+		keyPath := strings.TrimSpace(target.KeyPath)
+		if strings.HasPrefix(keyPath, "-") || !safeSSHToken(keyPath) {
+			return "", fmt.Errorf("unsafe ssh key path")
+		}
+		args = append(args, "-i", keyPath)
 	}
 
-	args = append(args, destination, command)
+	args = append(args, "--", destination, command)
 
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	output, err := cmd.CombinedOutput()
@@ -146,7 +150,7 @@ func DefaultSSHRunner(ctx context.Context, target Target, command string) (strin
 }
 
 func safeSSHToken(val string) bool {
-	if val == "" {
+	if val == "" || strings.HasPrefix(val, "-") {
 		return false
 	}
 	for _, r := range val {
