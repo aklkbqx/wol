@@ -48,6 +48,8 @@ func main() {
 		os.Exit(exitCode)
 	case "remote":
 		os.Exit(runRemote(os.Args[2:]))
+	case "shutdown":
+		os.Exit(runShutdown(os.Args[2:]))
 	case "import":
 		os.Exit(runImport(os.Args[2:]))
 	case "export":
@@ -161,6 +163,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Commands:")
 	fmt.Fprintln(os.Stderr, "  wol tui          Open the local Wake Desk")
 	fmt.Fprintln(os.Stderr, "  wol wake         Wake a stored machine or MAC address")
+	fmt.Fprintln(os.Stderr, "  wol shutdown     Shutdown or schedule power-off for a machine")
 	fmt.Fprintln(os.Stderr, "  wol remote       Open or configure a machine's remote session")
 	fmt.Fprintln(os.Stderr, "  wol status       Check a stored machine's power state")
 	fmt.Fprintln(os.Stderr, "  wol scan         Discover local network targets")

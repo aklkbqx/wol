@@ -198,6 +198,30 @@ CREATE TABLE IF NOT EXISTS remote_profiles (
   updated_at TEXT NOT NULL,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS power_profiles (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL UNIQUE,
+  ssh_user TEXT NOT NULL DEFAULT '',
+  ssh_port INTEGER NOT NULL DEFAULT 22,
+  ssh_key TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT 'windows',
+  use_sudo INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS power_attempts (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  device_name TEXT NOT NULL,
+  action TEXT NOT NULL,
+  delay_seconds INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  message TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS power_attempts_created_idx ON power_attempts(created_at DESC);
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL

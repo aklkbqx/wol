@@ -494,6 +494,10 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.beginEdit()
 	case "p":
 		m.beginRemoteProfile()
+	case "P":
+		if m.tab == 0 {
+			m.beginShutdownForm()
+		}
 	case "x":
 		if m.tab == 0 {
 			return m.beginDisconnect()
@@ -530,13 +534,13 @@ func (m *WakeModel) openActionPicker() {
 
 func (m *WakeModel) handleActionPicker(keyName string) tea.Cmd {
 	switch keyName {
-	case "esc", "q", "4":
+	case "esc", "q", "5":
 		m.actionPicker = false
 		m.status = "Action cancelled."
 	case "j", "down":
-		m.pickerSelected = (m.pickerSelected + 1) % 4
+		m.pickerSelected = (m.pickerSelected + 1) % 5
 	case "k", "up":
-		m.pickerSelected = (m.pickerSelected + 3) % 4
+		m.pickerSelected = (m.pickerSelected + 4) % 5
 	case "1", "w":
 		m.actionPicker = false
 		return m.beginWake(false)
@@ -546,6 +550,9 @@ func (m *WakeModel) handleActionPicker(keyName string) tea.Cmd {
 	case "3", "s":
 		m.actionPicker = false
 		return m.probeSelected()
+	case "4", "p", "P":
+		m.actionPicker = false
+		m.beginShutdownForm()
 	case "enter":
 		selected := m.pickerSelected
 		m.actionPicker = false
@@ -556,6 +563,8 @@ func (m *WakeModel) handleActionPicker(keyName string) tea.Cmd {
 			return m.beginWakeAndRemote()
 		case 2:
 			return m.probeSelected()
+		case 3:
+			m.beginShutdownForm()
 		default:
 			m.status = "Action cancelled."
 		}

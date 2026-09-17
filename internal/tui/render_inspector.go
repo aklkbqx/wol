@@ -64,6 +64,7 @@ func (m *WakeModel) renderActionPicker(devices []store.Device, width int) string
 		{"w", "wake"},
 		{"c", remoteLabel},
 		{"s", "check"},
+		{"P", "power off"},
 		{"esc", "cancel"},
 	}
 	rows := []string{m.theme.title().Render(fitText(device.Name, max(1, width))), ""}

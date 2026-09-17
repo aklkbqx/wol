@@ -34,6 +34,12 @@ type Repository interface {
 	CreateWakeRelay(context.Context, WakeRelay) (WakeRelay, error)
 	UpdateWakeRelay(context.Context, string, WakeRelay) (WakeRelay, error)
 	DeleteWakeRelay(context.Context, string) error
+
+	GetPowerProfile(context.Context, string) (PowerProfile, error)
+	UpsertPowerProfile(context.Context, PowerProfile) (PowerProfile, error)
+	DeletePowerProfile(context.Context, string) error
+	RecordPowerAttempt(context.Context, PowerAttempt) (PowerAttempt, error)
+	ListPowerAttempts(context.Context, int) ([]PowerAttempt, error)
 }
 
 var _ Repository = (*Store)(nil)

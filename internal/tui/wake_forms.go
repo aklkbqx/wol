@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aklkbqx/wol/internal/power"
 	"github.com/aklkbqx/wol/internal/store"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,6 +21,7 @@ const (
 	deviceForm        wakeFormKind = "device"
 	relayForm         wakeFormKind = "relay"
 	remoteProfileForm wakeFormKind = "remote-profile"
+	powerForm         wakeFormKind = "power"
 )
 
 type wakeForm struct {
@@ -203,6 +205,51 @@ func (m *WakeModel) beginRemoteProfile() {
 	m.status = "Remote profile. Passwords are never stored."
 }
 
+func (m *WakeModel) beginShutdownForm() {
+	if m.tab != 0 {
+		return
+	}
+	devices := m.filteredDevices()
+	if len(devices) == 0 {
+		m.status = "No machine selected."
+		return
+	}
+	device := devices[min(m.selected, len(devices)-1)]
+	sshUser := ""
+	sshPort := "22"
+	platform := device.Platform
+	if platform == "" || platform == "unknown" {
+		platform = "windows"
+	}
+	useSudo := "no"
+
+	if m.repository != nil {
+		if profile, err := m.repository.GetPowerProfile(context.Background(), device.ID); err == nil {
+			if profile.SSHUser != "" {
+				sshUser = profile.SSHUser
+			}
+			if profile.SSHPort > 0 {
+				sshPort = strconv.Itoa(profile.SSHPort)
+			}
+			if profile.Platform != "" {
+				platform = profile.Platform
+			}
+			if profile.UseSudo {
+				useSudo = "yes"
+			}
+		} else if rProfile, err := m.repository.GetRemoteProfile(context.Background(), device.ID); err == nil {
+			if rProfile.UsernameHint != "" {
+				sshUser = rProfile.UsernameHint
+			}
+		}
+	}
+
+	m.form = newWakeForm(powerForm, device.ID, powerFormLabels(), []string{
+		"now", sshUser, sshPort, platform, useSudo,
+	}, m.theme)
+	m.status = "Power off " + device.Name + ". Enter action/delay (now, 15m, 30m, 1h, cancel)."
+}
+
 func (m *WakeModel) beginDelete() {
 	if m.tab == 0 {
 		devices := m.filteredDevices()
@@ -351,6 +398,89 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			return formSavedMsg{message: "Remote profile saved."}
 		}
 
+		if form.kind == powerForm {
+			device, err := m.repository.GetDevice(ctx, form.id)
+			if err != nil {
+				return formSavedMsg{message: "Power operation failed: machine no longer exists.", keep: true}
+			}
+			actionInput := strings.ToLower(strings.TrimSpace(values[0]))
+			sshUser := strings.TrimSpace(values[1])
+			sshPort, err := parseFormInt(values[2], 22)
+			if err != nil {
+				return formSavedMsg{message: "Power operation failed: valid port is required.", keep: true}
+			}
+			platform := strings.TrimSpace(values[3])
+			useSudo := strings.EqualFold(strings.TrimSpace(values[4]), "yes") || strings.EqualFold(strings.TrimSpace(values[4]), "true") || strings.TrimSpace(values[4]) == "1"
+
+			_, _ = m.repository.UpsertPowerProfile(ctx, store.PowerProfile{
+				DeviceID: device.ID,
+				SSHUser:  sshUser,
+				SSHPort:  sshPort,
+				Platform: platform,
+				UseSudo:  useSudo,
+				Enabled:  true,
+			})
+
+			var delay time.Duration
+			cancel := false
+			if actionInput == "cancel" {
+				cancel = true
+			} else if actionInput != "now" && actionInput != "0" && actionInput != "" {
+				parsed, err := time.ParseDuration(actionInput)
+				if err != nil {
+					return formSavedMsg{message: "Invalid action/delay: enter 'now', 'cancel', or duration like '15m', '30m', '1h'.", keep: true}
+				}
+				delay = parsed
+			}
+
+			target := power.Target{
+				DeviceID:   device.ID,
+				DeviceName: device.Name,
+				Host:       device.IPAddress,
+				Port:       sshPort,
+				User:       sshUser,
+				Platform:   platform,
+				UseSudo:    useSudo,
+			}
+
+			svc := power.NewService(nil)
+			callCtx, cancelFn := context.WithTimeout(ctx, 10*time.Second)
+			defer cancelFn()
+
+			res, execErr := svc.Execute(callCtx, power.Request{
+				Target: target,
+				Delay:  delay,
+				Cancel: cancel,
+				Force:  true,
+			})
+
+			statusStr := "sent"
+			msg := ""
+			if execErr != nil {
+				statusStr = "failed"
+				msg = execErr.Error()
+			}
+			_, _ = m.repository.RecordPowerAttempt(ctx, store.PowerAttempt{
+				DeviceID:     device.ID,
+				DeviceName:   device.Name,
+				Action:       string(res.Action),
+				DelaySeconds: int(delay.Seconds()),
+				Status:       statusStr,
+				Message:      msg,
+			})
+
+			if execErr != nil {
+				return formSavedMsg{message: "Power command failed: " + execErr.Error(), keep: true}
+			}
+
+			if cancel {
+				return formSavedMsg{message: device.Name + " · shutdown cancelled."}
+			} else if delay > 0 {
+				return formSavedMsg{message: fmt.Sprintf("%s · shutdown scheduled in %s (at %s)", device.Name, delay, res.ScheduledTime.Format("15:04:05"))}
+			}
+			return formSavedMsg{message: device.Name + " · immediate shutdown command sent."}
+		}
+
 		port, err := parseFormInt(values[4], 9)
 		if err != nil || strings.TrimSpace(values[0]) == "" || strings.TrimSpace(values[1]) == "" {
 			return formSavedMsg{message: "Machine save failed: name, MAC, and valid port are required.", keep: true}
@@ -415,6 +545,10 @@ func remoteProfileFormLabels() []string {
 	return []string{"Protocol (sunshine/rdp/vnc/ssh)", "Host", "Port", "Verify port", "FPS (60/120)", "Resolution (e.g. 1920x1080)", "App name (Desktop)"}
 }
 
+func powerFormLabels() []string {
+	return []string{"Action (now/15m/30m/1h/cancel)", "SSH user", "SSH port", "Platform (windows/linux/darwin)", "Use sudo (yes/no)"}
+}
+
 func validateRemoteProfile(profile store.RemoteProfile) error {
 	switch strings.ToLower(strings.TrimSpace(profile.Protocol)) {
 	case "sunshine", "rdp", "vnc", "ssh":
@@ -475,6 +609,8 @@ func (m *WakeModel) renderForm(width int) string {
 		title = "route"
 	} else if form.kind == remoteProfileForm {
 		title = "remote"
+	} else if form.kind == powerForm {
+		title = "power off"
 	}
 	return m.theme.title().Render(title) + "\n" + strings.Join(rows, "\n")
 }

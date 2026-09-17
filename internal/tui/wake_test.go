@@ -324,7 +324,7 @@ func TestEnterOnlyOpensActionPicker(t *testing.T) {
 		t.Fatalf("Enter executed work: picker=%v opening=%v waking=%v checking=%v", model.actionPicker, model.opening, model.waking, model.checking)
 	}
 	view := model.View()
-	for _, want := range []string{"wake", "stream", "check", "cancel"} {
+	for _, want := range []string{"wake", "stream", "check", "power off", "cancel"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("picker missing %q:\n%s", want, view)
 		}
@@ -362,9 +362,17 @@ func TestActionPickerOptionsAreDeterministic(t *testing.T) {
 	}
 
 	model.openActionPicker()
-	model.pickerSelected = 3
+	model.pickerSelected = 4
 	if cmd := model.handleActionPicker("enter"); cmd != nil || model.actionPicker {
 		t.Fatalf("Cancel option started work")
+	}
+
+	// Test option 3 opens shutdown form
+	model.openActionPicker()
+	model.pickerSelected = 3
+	_ = model.handleActionPicker("enter")
+	if model.form == nil || model.form.kind != powerForm {
+		t.Fatalf("Power off option did not open power form: %+v", model.form)
 	}
 }
 
