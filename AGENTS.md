@@ -23,7 +23,9 @@ Current source beats README and comments.
 - Magic-packet send must tolerate missing/unreachable interfaces. Never crash the daemon on a bad subnet.
 - SQLite device-state updates are concurrency-safe.
 - SIGINT/SIGTERM stops listeners cleanly.
-- Versioning & Local Testing: After publishing a release tag, any subsequent edits must immediately set `internal/buildinfo/version.go` to the next `-dev` version (e.g. `0.4.10-dev`). Build and install the binary locally for testing: `make build && install -m 755 dist/wol ~/.local/bin/wol`.
+- Versioning, Deployment & Release Lifecycle:
+  - **Release & Deployment**: When deploying or releasing, promote `internal/buildinfo/version.go` to the real release version without `-dev` (e.g. `0.4.10`). Build and install the clean production binary locally (`make build && install -m 755 dist/wol ~/.local/bin/wol`), create the git tag, and publish the GitHub release with all cross-platform assets.
+  - **Post-Release Development**: Immediately upon any subsequent edits after publishing a release tag, bump `internal/buildinfo/version.go` to the next `-dev` version (e.g. `0.4.11-dev`), and install locally for testing (`make build && install -m 755 dist/wol ~/.local/bin/wol`).
 
 ## Verify
 
