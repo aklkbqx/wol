@@ -893,6 +893,88 @@ func TestMachineFormInteractiveTextInput(t *testing.T) {
 	}
 }
 
+func TestWakeWaitSignalPathAnimatesContinuously(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0)
+	model := &WakeModel{
+		theme:  NewTheme(false, true),
+		action: "wake-wait",
+		waking: true,
+		motion: Motion{
+			Enabled: true, Stage: StageSignal,
+			Started: started, Duration: 95 * time.Second,
+			Until: started.Add(95 * time.Second),
+		},
+	}
+	// Cycle duration is 900ms (300ms per step: 0 -> 1 -> 2 -> 0 -> 1 -> 2...)
+	if got := model.pathPositionAt(started); got != 0 {
+		t.Fatalf("at 0ms, want position 0, got %d", got)
+	}
+	if got := model.pathPositionAt(started.Add(350 * time.Millisecond)); got != 1 {
+		t.Fatalf("at 350ms, want position 1, got %d", got)
+	}
+	if got := model.pathPositionAt(started.Add(650 * time.Millisecond)); got != 2 {
+		t.Fatalf("at 650ms, want position 2, got %d", got)
+	}
+	// After 900ms, it should cycle back to 0!
+	if got := model.pathPositionAt(started.Add(950 * time.Millisecond)); got != 0 {
+		t.Fatalf("at 950ms, want position 0 (cycled), got %d", got)
+	}
+	if got := model.pathPositionAt(started.Add(1250 * time.Millisecond)); got != 1 {
+		t.Fatalf("at 1250ms, want position 1 (cycled), got %d", got)
+	}
+
+	// When motion is disabled, returns position 0
+	still := model
+	still.motion.Enabled = false
+	if got := still.pathPositionAt(started.Add(950 * time.Millisecond)); got != 0 {
+		t.Fatalf("with motion disabled, want position 0, got %d", got)
+	}
+}
+
+func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0)
+	model := &WakeModel{
+		width: 100, height: 30,
+		theme:          NewTheme(true, false),
+		action:         "wake-wait",
+		actionTargetID: "win-1",
+		actionTarget:   "windows",
+		waking:         true,
+		devices: []store.Device{
+			{ID: "win-1", Name: "windows", Enabled: true, IPAddress: "192.168.1.100", MACAddress: "00:11:22:33:44:55"},
+		},
+		presence: map[string]string{"win-1": "offline"},
+		motion: Motion{
+			Enabled: true, Stage: StageSignal,
+			Started: started, Duration: 95 * time.Second,
+			Until: started.Add(95 * time.Second),
+		},
+	}
+	view0 := model.View()
+	if !strings.Contains(view0, "waking") {
+		t.Fatalf("fleet view expected to contain 'waking' during wake-wait:\n%s", view0)
+	}
+	if !strings.Contains(view0, "⠋ waking") {
+		t.Fatalf("fleet view expected to contain initial spinner frame '⠋ waking':\n%s", view0)
+	}
+
+	// Advance frame
+	model.frame = 4
+	view4 := model.View()
+	if !strings.Contains(view4, "⠹ waking") {
+		t.Fatalf("fleet view expected to contain rotated spinner frame '⠹ waking':\n%s", view4)
+	}
+
+	// Check reduced motion (ASCII)
+	asciiModel := model
+	asciiModel.theme = NewTheme(false, true)
+	asciiModel.frame = 0
+	asciiView := asciiModel.View()
+	if !strings.Contains(asciiView, "waking") {
+		t.Fatalf("ASCII fleet view expected to contain 'waking':\n%s", asciiView)
+	}
+}
+
 func assertViewFits(t *testing.T, model *WakeModel, width, height int) {
 	t.Helper()
 	view := model.View()
@@ -903,5 +985,90 @@ func assertViewFits(t *testing.T, model *WakeModel, width, height int) {
 		if got := lipgloss.Width(stripANSI(line)); got > width {
 			t.Fatalf("%dx%d line %d overflows at %d: %q", width, height, lineNo, got, line)
 		}
+	}
+}
+
+func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
+	device := store.Device{
+		ID:         "win-dev-1",
+		Name:       "windows-box",
+		MACAddress: "00:11:22:33:44:55",
+		IPAddress:  "192.168.1.100",
+		Enabled:    true,
+	}
+	started := time.Now()
+	model := &WakeModel{
+		width:   80,
+		height:  24,
+		theme:   NewTheme(true, false),
+		devices: []store.Device{device},
+		presence: map[string]string{
+			"win-dev-1": "online",
+		},
+		motion: Motion{
+			Enabled: true,
+			Stage:   StageSignal,
+			Started: started,
+			Until:   started.Add(90 * time.Second),
+		},
+	}
+
+	// 1. Initiate shutdown
+	model.Update(shutdownInitiatedMsg{
+		deviceID:   "win-dev-1",
+		deviceName: "windows-box",
+	})
+
+	if !model.shuttingDown {
+		t.Fatalf("expected shuttingDown to be true")
+	}
+	if model.action != "shutdown-wait" {
+		t.Fatalf("expected action to be shutdown-wait, got %q", model.action)
+	}
+
+	// Check view during shutdown
+	view := model.View()
+	if !strings.Contains(view, "stop") && !strings.Contains(view, "stopping") {
+		t.Fatalf("expected view to contain stop/stopping animation, got:\n%s", view)
+	}
+	if !strings.Contains(view, "SSH") || !strings.Contains(view, "WINDOWS-BOX") {
+		t.Fatalf("expected signal path to show SSH and destination, got:\n%s", view)
+	}
+
+	// 2. Key lockout during shuttingDown
+	for _, key := range []string{"p", "P", "a", "e", "d", "r", "s", "enter", "?"} {
+		cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		if cmd != nil {
+			t.Fatalf("expected key %q to be locked out during shutdown, but got cmd", key)
+		}
+		if !model.shuttingDown {
+			t.Fatalf("key %q erroneously broke out of shuttingDown state", key)
+		}
+	}
+
+	// 3. Auto offline without reload
+	model.Update(shutdownVerifyMsg{
+		operationID: model.actionID,
+		targetID:    "win-dev-1",
+		targetName:  "windows-box",
+		status:      "offline",
+	})
+
+	if model.shuttingDown {
+		t.Fatalf("expected shuttingDown to be false after offline verification")
+	}
+	if model.presence["win-dev-1"] != "offline" {
+		t.Fatalf("expected presence to be offline, got %q", model.presence["win-dev-1"])
+	}
+	if !strings.Contains(model.status, "ASLEEP after shutdown") {
+		t.Fatalf("expected status to mention ASLEEP after shutdown, got %q", model.status)
+	}
+
+	offlineView := model.View()
+	if !strings.Contains(offlineView, "asleep") {
+		t.Fatalf("expected offline view to display 'asleep', got:\n%s", offlineView)
+	}
+	if !strings.Contains(offlineView, "1 asleep") {
+		t.Fatalf("expected fleet summary to count 1 asleep, got:\n%s", offlineView)
 	}
 }

@@ -216,7 +216,7 @@ func (m *WakeModel) verifyText(device store.Device) string {
 	if port < 1 || port > 65535 {
 		return "invalid TCP port"
 	}
-	return net.JoinHostPort(device.IPAddress, strconv.Itoa(device.VerifyPort))
+	return net.JoinHostPort(device.IPAddress, strconv.Itoa(port))
 }
 
 func (m *WakeModel) routeTarget(device store.Device) (destination string, port int) {

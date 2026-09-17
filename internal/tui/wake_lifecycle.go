@@ -28,9 +28,9 @@ func (m *WakeModel) beginRefresh(kind loadingKind) tea.Cmd {
 		m.phase = phaseRefreshing
 	}
 	m.status = "Reading local inventory..."
-	m.motion.TriggerStage(time.Now(), StageSignal, 15*time.Second, 0, 0)
+	motionCmd := m.triggerMotion(StageSignal, 15*time.Second, 0, 0)
 	m.loadContext, m.loadCancel = context.WithCancel(context.Background())
-	return tea.Batch(m.loadData(m.loadContext, m.requestID, kind), m.motionTick())
+	return tea.Batch(m.loadData(m.loadContext, m.requestID, kind), motionCmd)
 }
 
 func (m *WakeModel) loadData(parent context.Context, requestID uint64, kind loadingKind) tea.Cmd {
@@ -75,8 +75,19 @@ func (m *WakeModel) commitPending(statuses map[string]string, summary presence.S
 	for deviceID, status := range statuses {
 		m.presence[deviceID] = status
 	}
-	if m.selected >= len(m.filteredDevices()) {
-		m.selected = max(0, len(m.filteredDevices())-1)
+	count := 0
+	switch m.tab {
+	case 0:
+		count = len(m.filteredDevices())
+	case 1:
+		count = len(m.relayList())
+	default:
+		count = len(m.history)
+	}
+	if count == 0 {
+		m.selected = 0
+	} else if m.selected >= count {
+		m.selected = count - 1
 	}
 	m.pending = nil
 	m.phase = phaseReady
@@ -86,7 +97,7 @@ func (m *WakeModel) commitPending(statuses map[string]string, summary presence.S
 	m.loadingTarget = ""
 	m.checkedAt = time.Now()
 	m.stale = false
-	m.motion.Until = time.Time{}
+	m.stopMotion()
 	m.finishLoadContext()
 	if len(m.devices) == 0 {
 		m.status = fmt.Sprintf("Inventory ready: %d machine(s), %d route(s).", len(m.devices), len(m.relays))
@@ -100,7 +111,7 @@ func (m *WakeModel) failLoading(message string) tea.Cmd {
 	m.pending = nil
 	m.loading = false
 	m.checking = false
-	m.motion.Until = time.Time{}
+	m.stopMotion()
 	m.finishLoadContext()
 	if wasBoot {
 		m.phase = phaseLoadError
@@ -129,6 +140,6 @@ func (m *WakeModel) cancelLoading() {
 	m.loading = false
 	m.checking = false
 	m.phase = phaseReady
-	m.motion.Until = time.Time{}
+	m.stopMotion()
 	m.status = "Check cancelled. Showing the last verified state."
 }

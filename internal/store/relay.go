@@ -102,6 +102,7 @@ func (s *Store) DeleteWakeRelay(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `UPDATE devices SET wake_relay_id = '' WHERE wake_relay_id = ?`, id); err != nil {
 		_ = tx.Rollback()
 		return err

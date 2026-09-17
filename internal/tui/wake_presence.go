@@ -29,10 +29,14 @@ func (m *WakeModel) startPresenceScan(devices []store.Device, requestID uint64, 
 	}
 	targets := make([]presence.Target, 0, len(devices))
 	for _, device := range devices {
+		port := device.VerifyPort
+		if profile, ok := m.profiles[device.ID]; port == 0 && ok {
+			port = profile.VerifyPort
+		}
 		targets = append(targets, presence.Target{
 			DeviceID:   device.ID,
 			IPAddress:  device.IPAddress,
-			VerifyPort: device.VerifyPort,
+			VerifyPort: port,
 		})
 	}
 	detector := m.presenceDetector()
@@ -68,7 +72,7 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 		m.status = "Power scan is already running."
 		return nil
 	}
-	device := devices[m.selected]
+	device := devices[max(0, min(m.selected, len(devices)-1))]
 	if strings.TrimSpace(device.IPAddress) == "" {
 		m.status = "Status unavailable: machine has no IP address."
 		return nil
@@ -92,7 +96,7 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 	}
 	detector := m.presenceDetector()
 	m.checking = true
-	m.motion.TriggerStage(time.Now(), StageSignal, 15*time.Second, 0, 0)
+	motionCmd := m.triggerMotion(StageSignal, 15*time.Second, 0, 0)
 	m.loadContext, m.loadCancel = context.WithCancel(context.Background())
 	requestID := m.requestID
 	parent := m.loadContext
@@ -102,5 +106,5 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 		result := detector.Probe(ctx, presence.Target{DeviceID: device.ID, IPAddress: device.IPAddress, VerifyPort: port}, 2500*time.Millisecond)
 		return probeResultMsg{requestID: requestID, deviceID: device.ID, status: string(result.Status)}
 	}
-	return tea.Batch(checkCmd, m.motionTick())
+	return tea.Batch(checkCmd, motionCmd)
 }

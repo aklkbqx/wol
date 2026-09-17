@@ -72,7 +72,9 @@ type probeBatchMsg struct {
 	err       error
 }
 
-type wakeTickMsg struct{}
+type wakeTickMsg struct {
+	id uint64
+}
 
 type viewPhase uint8
 
@@ -101,6 +103,18 @@ const (
 type formSavedMsg struct {
 	message string
 	keep    bool
+}
+
+type shutdownInitiatedMsg struct {
+	deviceID   string
+	deviceName string
+}
+
+type shutdownVerifyMsg struct {
+	operationID uint64
+	targetID    string
+	targetName  string
+	status      string
 }
 
 // WakeModel is the standalone Wake Desk. It opens SQLite directly and never
@@ -144,6 +158,7 @@ type WakeModel struct {
 	loading        bool
 	waking         bool
 	opening        bool
+	shuttingDown   bool
 	action         string
 	checking       bool
 	status         string
@@ -160,6 +175,7 @@ type WakeModel struct {
 	actionID       uint64
 	actionTargetID string
 	actionTarget   string
+	motionID       uint64
 	frame          uint64
 }
 
@@ -254,12 +270,13 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prependWakeAttempt(value.result.Attempt)
 			m.status = fmt.Sprintf("%s · packet sent via %s (%d). Waiting for power...", value.targetName, routeLabel(value.result.Route), value.result.Attempt.Packets)
 			m.action = "wake-wait"
-			return m, m.verifyWake(value.operationID, value.result.Device)
+			motionCmd := m.triggerMotion(StageSignal, 95*time.Second, 0, 0)
+			return m, tea.Batch(m.verifyWake(value.operationID, value.result.Device), motionCmd)
 		}
 		m.waking = false
 		m.prependWakeAttempt(value.result.Attempt)
 		m.finishAction()
-		m.motion.Until = time.Time{}
+		m.stopMotion()
 		m.status = value.targetName + " · wake failed: " + value.err.Error()
 		return m, nil
 	case wakeVerifyMsg:
@@ -268,7 +285,7 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.waking = false
 		m.finishAction()
-		m.motion.Until = time.Time{}
+		m.stopMotion()
 		m.ensurePresence()
 		if value.status == "online" {
 			m.presence[value.targetID] = "online"
@@ -285,7 +302,7 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.opening = false
 		m.finishAction()
-		m.motion.Until = time.Time{}
+		m.stopMotion()
 		if value.err != nil {
 			if errors.Is(value.err, context.Canceled) {
 				m.status = value.deviceName + " · cancelled."
@@ -322,7 +339,7 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.checking = false
 		m.loading = false
 		m.phase = phaseReady
-		m.motion.Until = time.Time{}
+		m.stopMotion()
 		m.finishLoadContext()
 		if value.err != nil {
 			m.status = "Status check failed: " + value.err.Error()
@@ -346,9 +363,50 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commitPending(value.statuses, value.summary)
 		return m, nil
 	case wakeTickMsg:
+		if value.id != 0 && value.id != m.motionID {
+			return m, nil
+		}
 		if m.motion.Step(time.Now()) {
 			m.frame = m.motion.Frame
 			return m, m.motionTick()
+		}
+		return m, nil
+	case shutdownInitiatedMsg:
+		m.form = nil
+		m.actionID++
+		operationID := m.actionID
+		m.actionTargetID = value.deviceID
+		m.actionTarget = value.deviceName
+		m.action = "shutdown-wait"
+		m.shuttingDown = true
+		device, ok := m.actionDevice()
+		if !ok {
+			m.shuttingDown = false
+			m.finishAction()
+			m.stopMotion()
+			m.status = value.deviceName + " · machine not found in active inventory."
+			return m, nil
+		}
+		motionCmd := m.triggerMotion(StageSignal, 90*time.Second, 0, 0)
+		ctx, cancel := context.WithCancel(context.Background())
+		m.actionContext = ctx
+		m.actionCancel = cancel
+		return m, tea.Batch(m.verifyShutdown(operationID, device), motionCmd)
+	case shutdownVerifyMsg:
+		if value.operationID != m.actionID || value.targetID != m.actionTargetID {
+			return m, nil
+		}
+		m.shuttingDown = false
+		m.finishAction()
+		m.stopMotion()
+		m.ensurePresence()
+		if value.status == "offline" {
+			m.presence[value.targetID] = "offline"
+			m.ensureCheckedDevice()
+			m.checkedDevice[value.targetID] = time.Now()
+			m.status = value.targetName + " · ASLEEP after shutdown."
+		} else {
+			m.status = value.targetName + " · shutdown command sent, but machine is still responding. Press s to check again."
 		}
 		return m, nil
 	case formSavedMsg:
@@ -369,6 +427,13 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	keyName := msg.String()
+	if keyName == "ctrl+c" {
+		if m.actionCancel != nil {
+			m.actionCancel()
+		}
+		m.finishLoadContext()
+		return tea.Quit
+	}
 	if m.phase != phaseReady {
 		switch keyName {
 		case "q", "ctrl+c":
@@ -388,7 +453,7 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.form != nil {
 		return m.handleFormKey(msg)
 	}
-	if (m.waking || m.opening) && (keyName == "q" || keyName == "ctrl+c") {
+	if (m.waking || m.opening || m.shuttingDown) && (keyName == "q" || keyName == "ctrl+c") {
 		if m.actionCancel != nil {
 			m.actionCancel()
 		}
@@ -398,7 +463,7 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.actionPicker {
 		return m.handleActionPicker(keyName)
 	}
-	if keyName == "esc" && (m.waking || m.opening) {
+	if keyName == "esc" && (m.waking || m.opening || m.shuttingDown) {
 		target := m.actionTarget
 		m.cancelAction()
 		m.status = target + " · action cancelled."
@@ -442,12 +507,9 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.waking || m.opening {
-		switch keyName {
-		case "tab", "1", "2", "3", "m", "h", "j", "k", "up", "down", "enter", "w", "c", "f", "s", "r", "a", "e", "p", "d", "x", "/":
-			m.status = m.actionTarget + " · action in progress; selection is locked. Press Esc to cancel."
-			return nil
-		}
+	if m.waking || m.opening || m.shuttingDown {
+		m.status = m.actionTarget + " · action in progress; selection is locked. Press Esc to cancel."
+		return nil
 	}
 
 	switch keyName {
@@ -596,8 +658,18 @@ func (m *WakeModel) move(delta int) tea.Cmd {
 	if from < start || from >= start+len(visible) {
 		return nil
 	}
-	m.motion.TriggerStage(time.Now(), StageSelect, 180*time.Millisecond, from, m.selected)
+	return m.triggerMotion(StageSelect, 180*time.Millisecond, from, m.selected)
+}
+
+func (m *WakeModel) triggerMotion(stage Stage, duration time.Duration, origin, dest int) tea.Cmd {
+	m.motionID++
+	m.motion.TriggerStage(time.Now(), stage, duration, origin, dest)
 	return m.motionTick()
+}
+
+func (m *WakeModel) stopMotion() {
+	m.motionID++
+	m.motion.Until = time.Time{}
 }
 
 func (m *WakeModel) motionTick() tea.Cmd {
@@ -609,7 +681,8 @@ func (m *WakeModel) motionTick() tea.Cmd {
 	if interval <= 0 {
 		return nil
 	}
-	return tea.Tick(interval, func(time.Time) tea.Msg { return wakeTickMsg{} })
+	id := m.motionID
+	return tea.Tick(interval, func(time.Time) tea.Msg { return wakeTickMsg{id: id} })
 }
 
 func (m *WakeModel) View() string {
@@ -663,7 +736,7 @@ func (m *WakeModel) View() string {
 			builder.WriteString(m.renderMachines(inner, mode))
 		}
 	}
-	showStatus := m.height <= 0 || m.height >= 22 || m.loading || m.waking || m.opening || m.checking || statusNeedsAttention(m.status)
+	showStatus := m.height <= 0 || m.height >= 22 || m.loading || m.waking || m.opening || m.shuttingDown || m.checking || statusNeedsAttention(m.status)
 	if m.status != "" && showStatus {
 		status := m.status
 		if m.motion.Active(time.Now()) && m.motion.Stage == StageSignal {
@@ -671,7 +744,7 @@ func (m *WakeModel) View() string {
 			if m.theme.ASCII {
 				frames = []string{".", "..", "...", "...."}
 			}
-			status = frames[int(m.frame)%len(frames)] + " " + status
+			status = frames[(int(m.frame)/3)%len(frames)] + " " + status
 		}
 		builder.WriteString("\n" + renderNotice(m.theme, fitText(status, inner), inner))
 	}

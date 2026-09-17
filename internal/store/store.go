@@ -451,6 +451,7 @@ func (s *Store) DeleteSite(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `UPDATE devices SET site_id = '' WHERE site_id = ?`, id); err != nil {
 		tx.Rollback()
 		return err
@@ -547,11 +548,16 @@ func (s *Store) DeleteDevice(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE device_id = ?`, id); err != nil {
 		tx.Rollback()
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_profiles WHERE device_id = ?`, id); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM power_profiles WHERE device_id = ?`, id); err != nil {
 		tx.Rollback()
 		return err
 	}
@@ -639,6 +645,7 @@ func (s *Store) CreateGroup(ctx context.Context, item Group) (Group, error) {
 	if err != nil {
 		return Group{}, err
 	}
+	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO groups_table (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), item.Description, item.CreatedAt, item.UpdatedAt); err != nil {
 		tx.Rollback()
 		return Group{}, normalizeDBError(err)
@@ -659,6 +666,7 @@ func (s *Store) UpdateGroup(ctx context.Context, id string, item Group) (Group, 
 	if err != nil {
 		return Group{}, err
 	}
+	defer tx.Rollback()
 	result, err := tx.ExecContext(ctx, `UPDATE groups_table SET name = ?, description = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), item.Description, now, id)
 	if err != nil {
 		tx.Rollback()
@@ -683,6 +691,7 @@ func (s *Store) DeleteGroup(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE group_id = ?`, id); err != nil {
 		tx.Rollback()
 		return err
