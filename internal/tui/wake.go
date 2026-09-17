@@ -683,9 +683,10 @@ func (m *WakeModel) View() string {
 	}
 	if m.showHelp {
 		builder.WriteString("\n" + renderPanel(m.theme, "keys", "v"+m.version+"  "+m.credit, strings.Join([]string{
-			"enter   choose wake, stream, or check",
+			"enter   choose wake, stream, check, or power off",
 			"w       wake",
 			"c       wake and stream / remote",
+			"P       power off / schedule shutdown",
 			"x       disconnect stream",
 			"s       check power",
 			"p       remote setup",
