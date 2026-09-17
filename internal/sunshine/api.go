@@ -68,7 +68,7 @@ func (c *Client) Pair(ctx context.Context, pin string, clientName string) error 
 		return fmt.Errorf("marshal pair payload: %w", err)
 	}
 
-	url := fmt.Sprintf("https://%s:%d/api/pin", c.Host, c.Port)
+	url := fmt.Sprintf("https://%s/api/pin", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("create pairing request: %w", err)
@@ -101,7 +101,7 @@ func (c *Client) csrfToken(ctx context.Context) string {
 	if c == nil || c.HTTPClient == nil {
 		return ""
 	}
-	url := fmt.Sprintf("https://%s:%d/api/csrf-token", c.Host, c.Port)
+	url := fmt.Sprintf("https://%s/api/csrf-token", net.JoinHostPort(c.Host, strconv.Itoa(c.Port)))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ""

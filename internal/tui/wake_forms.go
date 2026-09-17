@@ -148,7 +148,7 @@ func (m *WakeModel) beginEdit() {
 			m.status = "No machine selected."
 			return
 		}
-		device := devices[m.selected]
+		device := devices[min(m.selected, len(devices)-1)]
 		m.form = newWakeForm(deviceForm, device.ID, deviceFormLabels(), []string{
 			device.Name, device.MACAddress, device.IPAddress, device.BroadcastAddress,
 			strconv.Itoa(device.Port), device.Interface, strconv.Itoa(device.VerifyPort),
@@ -163,7 +163,7 @@ func (m *WakeModel) beginEdit() {
 			m.status = "No route selected."
 			return
 		}
-		relay := relays[m.selected]
+		relay := relays[min(m.selected, len(relays)-1)]
 		m.form = newWakeForm(relayForm, relay.ID, relayFormLabels(), []string{
 			relay.Name, relay.Address, strconv.Itoa(relay.Port), relay.Interface, relay.SSHUser,
 		}, m.theme)
@@ -254,14 +254,16 @@ func (m *WakeModel) beginDelete() {
 	if m.tab == 0 {
 		devices := m.filteredDevices()
 		if len(devices) > 0 {
-			m.confirm = "machine:" + devices[m.selected].ID
-			m.status = "Delete " + devices[m.selected].Name + "? press y/Enter to confirm."
+			dev := devices[min(m.selected, len(devices)-1)]
+			m.confirm = "machine:" + dev.ID
+			m.status = "Delete " + dev.Name + "? press y/Enter to confirm."
 		}
 	} else if m.tab == 1 {
 		relays := m.relayList()
 		if len(relays) > 0 {
-			m.confirm = "relay:" + relays[m.selected].ID
-			m.status = "Delete route " + relays[m.selected].Name + "? press y/Enter to confirm."
+			rel := relays[min(m.selected, len(relays)-1)]
+			m.confirm = "relay:" + rel.ID
+			m.status = "Delete route " + rel.Name + "? press y/Enter to confirm."
 		}
 	}
 }
@@ -296,6 +298,10 @@ func (m *WakeModel) handleFormKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	form.ensureInputs(m.theme)
 	name := msg.String()
+	if name == "ctrl+c" {
+		m.finishLoadContext()
+		return tea.Quit
+	}
 	if name == "esc" {
 		m.form = nil
 		m.status = "Edit cancelled."
@@ -412,26 +418,32 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			platform := strings.TrimSpace(values[3])
 			useSudo := strings.EqualFold(strings.TrimSpace(values[4]), "yes") || strings.EqualFold(strings.TrimSpace(values[4]), "true") || strings.TrimSpace(values[4]) == "1"
 
-			_, _ = m.repository.UpsertPowerProfile(ctx, store.PowerProfile{
-				DeviceID: device.ID,
-				SSHUser:  sshUser,
-				SSHPort:  sshPort,
-				Platform: platform,
-				UseSudo:  useSudo,
-				Enabled:  true,
-			})
-
 			var delay time.Duration
 			cancel := false
 			if actionInput == "cancel" {
 				cancel = true
 			} else if actionInput != "now" && actionInput != "0" && actionInput != "" {
 				parsed, err := time.ParseDuration(actionInput)
-				if err != nil {
+				if err != nil || parsed < 0 {
 					return formSavedMsg{message: "Invalid action/delay: enter 'now', 'cancel', or duration like '15m', '30m', '1h'.", keep: true}
 				}
 				delay = parsed
 			}
+
+			sshKey := ""
+			if existingProfile, err := m.repository.GetPowerProfile(ctx, device.ID); err == nil {
+				sshKey = existingProfile.SSHKey
+			}
+
+			_, _ = m.repository.UpsertPowerProfile(ctx, store.PowerProfile{
+				DeviceID: device.ID,
+				SSHUser:  sshUser,
+				SSHPort:  sshPort,
+				SSHKey:   sshKey,
+				Platform: platform,
+				UseSudo:  useSudo,
+				Enabled:  true,
+			})
 
 			target := power.Target{
 				DeviceID:   device.ID,
@@ -439,12 +451,13 @@ func (m *WakeModel) saveForm() tea.Cmd {
 				Host:       device.IPAddress,
 				Port:       sshPort,
 				User:       sshUser,
+				KeyPath:    sshKey,
 				Platform:   platform,
 				UseSudo:    useSudo,
 			}
 
 			svc := power.NewService(nil)
-			callCtx, cancelFn := context.WithTimeout(ctx, 10*time.Second)
+			callCtx, cancelFn := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancelFn()
 
 			res, execErr := svc.Execute(callCtx, power.Request{
@@ -460,7 +473,9 @@ func (m *WakeModel) saveForm() tea.Cmd {
 				statusStr = "failed"
 				msg = execErr.Error()
 			}
-			_, _ = m.repository.RecordPowerAttempt(ctx, store.PowerAttempt{
+			recordCtx, recordCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer recordCancel()
+			_, _ = m.repository.RecordPowerAttempt(recordCtx, store.PowerAttempt{
 				DeviceID:     device.ID,
 				DeviceName:   device.Name,
 				Action:       string(res.Action),
@@ -478,7 +493,7 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			} else if delay > 0 {
 				return formSavedMsg{message: fmt.Sprintf("%s · shutdown scheduled in %s (at %s)", device.Name, delay, res.ScheduledTime.Format("15:04:05"))}
 			}
-			return formSavedMsg{message: device.Name + " · immediate shutdown command sent."}
+			return shutdownInitiatedMsg{deviceID: device.ID, deviceName: device.Name}
 		}
 
 		port, err := parseFormInt(values[4], 9)

@@ -38,7 +38,7 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 		return lipgloss.JoinHorizontal(lipgloss.Top, leftCard, " ", rightCard)
 	}
 	list := m.renderMachineList(devices, width)
-	if target, ok := m.actionDevice(); ok && (m.waking || m.opening) {
+	if target, ok := m.actionDevice(); ok && (m.waking || m.opening || m.shuttingDown) {
 		return list + "\n" + m.theme.accent().Render(fitText(target.Name+"  "+m.renderSignalPath(target, max(1, width-len(target.Name)-4)), width))
 	}
 	if mode == LayoutWide {
@@ -91,7 +91,7 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 	for i, device := range visible {
 		globalIndex := start + i
 		highlighted := globalIndex == m.selected
-		if (m.waking || m.opening) && m.actionTargetID != "" {
+		if (m.waking || m.opening || m.shuttingDown) && m.actionTargetID != "" {
 			highlighted = device.ID == m.actionTargetID
 		}
 		marker := " "
@@ -110,6 +110,26 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 		}
 		powerStyled := stateStyle(m.theme, m.deviceState(device)).Render(padVisible(power, 8))
 		actionStyled := stateStyle(m.theme, actionState(action)).Render(action)
+		if (m.waking || m.opening || m.shuttingDown) && device.ID == m.actionTargetID {
+			spinner := "●"
+			if m.motion.Enabled {
+				if m.theme.ASCII {
+					asciiSpinners := []string{"-", "\\", "|", "/"}
+					spinner = asciiSpinners[(int(m.frame)/2)%len(asciiSpinners)]
+				} else {
+					spinners := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+					spinner = spinners[(int(m.frame)/2)%len(spinners)]
+				}
+			}
+			label := "waking"
+			if m.shuttingDown {
+				label = "stop"
+			} else if m.opening && !m.waking {
+				label = "remote"
+			}
+			power = spinner + " " + label
+			powerStyled = m.theme.accent().Render(padVisible(power, 8))
+		}
 		if width < 36 {
 			rows = append(rows, fitText(marker+" "+fitText(device.Name, max(1, rowWidth-2)), rowWidth))
 			rows = append(rows, fitText("  "+power+"  "+action, rowWidth))
@@ -159,7 +179,7 @@ func (m *WakeModel) selectedDevice(devices []store.Device) (store.Device, bool) 
 	if len(devices) == 0 {
 		return store.Device{}, false
 	}
-	if target, ok := m.actionDevice(); ok && (m.waking || m.opening) {
+	if target, ok := m.actionDevice(); ok && (m.waking || m.opening || m.shuttingDown) {
 		return target, true
 	}
 	return devices[min(m.selected, len(devices)-1)], true

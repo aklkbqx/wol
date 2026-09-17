@@ -150,9 +150,13 @@ func RunDoctorWithEnv(rootDir string, defaults []string) *DoctorReport {
 }
 
 func findRemoteEtherwake(host string) ([]byte, error) {
+	host = strings.TrimSpace(host)
+	if host == "" || strings.HasPrefix(host, "-") {
+		return nil, fmt.Errorf("invalid or unsafe ssh host")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", host, "command -v etherwake")
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=2", "--", host, "command -v etherwake")
 	return cmd.Output()
 }
 

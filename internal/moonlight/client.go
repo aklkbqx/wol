@@ -27,6 +27,7 @@ type Session struct {
 	mu      sync.Mutex
 	wait    sync.Once
 	waitErr error
+	done    chan struct{}
 }
 
 // LookPathFunc is a hook for exec.LookPath to allow unit testing.
@@ -140,7 +141,7 @@ func (c *Client) Start(ctx context.Context, host, appName string, fps int, resol
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start moonlight stream: %w", err)
 	}
-	session := &Session{cmd: cmd}
+	session := &Session{cmd: cmd, done: make(chan struct{})}
 	go session.reap()
 	return session, nil
 }
@@ -172,6 +173,9 @@ func (s *Session) reap() {
 	}
 	s.wait.Do(func() {
 		s.waitErr = s.cmd.Wait()
+		if s.done != nil {
+			close(s.done)
+		}
 	})
 }
 
@@ -186,7 +190,7 @@ func (s *Session) Stop() error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+	if !s.Alive() {
 		return nil
 	}
 	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
@@ -201,6 +205,14 @@ func (s *Session) Alive() bool {
 	if s == nil || s.cmd == nil || s.cmd.Process == nil {
 		return false
 	}
-	state := s.cmd.ProcessState
-	return state == nil || !state.Exited()
+	if s.done == nil {
+		state := s.cmd.ProcessState
+		return state == nil || !state.Exited()
+	}
+	select {
+	case <-s.done:
+		return false
+	default:
+		return true
+	}
 }

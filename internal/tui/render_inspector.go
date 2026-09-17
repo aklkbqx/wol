@@ -16,11 +16,30 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	if m.actionPicker {
 		return m.renderActionPicker(devices, width)
 	}
-	active := m.waking || m.opening
+	active := m.waking || m.opening || m.shuttingDown
 	rowWidth := max(1, width)
 	power := powerWord(m.deviceState(device))
 	wake := m.wakeCapability(device)
 	action := m.actionWord(device)
+	if active && (m.actionTargetID == "" || device.ID == m.actionTargetID) {
+		spinner := "●"
+		if m.motion.Enabled {
+			if m.theme.ASCII {
+				asciiSpinners := []string{"-", "\\", "|", "/"}
+				spinner = asciiSpinners[(int(m.frame)/2)%len(asciiSpinners)]
+			} else {
+				spinners := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+				spinner = spinners[(int(m.frame)/2)%len(spinners)]
+			}
+		}
+		label := "waking"
+		if m.shuttingDown {
+			label = "stopping"
+		} else if m.opening && !m.waking {
+			label = "connecting"
+		}
+		power = spinner + " " + label
+	}
 	lock := ""
 	if active {
 		lock = "locked · "
@@ -81,6 +100,9 @@ func (m *WakeModel) renderActionPicker(devices []store.Device, width int) string
 }
 
 func (m *WakeModel) renderSignalPath(device store.Device, width int) string {
+	if m.action == "shutdown-wait" {
+		return m.renderActionPath([]string{"DESK", "SSH", strings.ToUpper(fitText(device.Name, 12))}, width)
+	}
 	if m.action == "wake-remote" {
 		last := "REMOTE"
 		if profile, ok := m.profiles[device.ID]; ok && streamProfile(profile) {
@@ -99,7 +121,19 @@ func (m *WakeModel) pathPositionAt(now time.Time) int {
 	if !m.motion.Enabled {
 		return 0
 	}
-	if m.waking || m.opening {
+	if m.action == "wake-wait" || m.action == "wake-remote" || m.action == "shutdown-wait" {
+		if !m.motion.Active(now) {
+			return 2
+		}
+		cycleDuration := 900 * time.Millisecond
+		stepDuration := cycleDuration / 3
+		elapsed := now.Sub(m.motion.Started)
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		return int((elapsed % cycleDuration) / stepDuration)
+	}
+	if m.waking || m.opening || m.shuttingDown {
 		if !m.motion.Active(now) {
 			return 2
 		}

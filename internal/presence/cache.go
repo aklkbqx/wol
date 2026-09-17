@@ -92,6 +92,9 @@ func (c *Cache) Invalidate(key string) {
 // Resolve returns a fresh cached result or runs probe once for all concurrent
 // callers requesting the same key.
 func (c *Cache) Resolve(ctx context.Context, key string, force bool, probe func(context.Context) Result) (Result, error) {
+	if c == nil {
+		return probe(ctx), nil
+	}
 	if result, ok := c.Get(key, force); ok {
 		return result, nil
 	}
@@ -110,14 +113,16 @@ func (c *Cache) Resolve(ctx context.Context, key string, force bool, probe func(
 	c.inFlight[key] = call
 	c.mu.Unlock()
 
-	result := probe(ctx)
-	result = c.Set(key, result)
+	var result Result
+	defer func() {
+		c.mu.Lock()
+		call.result = result
+		delete(c.inFlight, key)
+		close(call.done)
+		c.mu.Unlock()
+	}()
 
-	c.mu.Lock()
-	call.result = result
-	call.err = nil
-	delete(c.inFlight, key)
-	close(call.done)
-	c.mu.Unlock()
+	result = probe(ctx)
+	result = c.Set(key, result)
 	return result, nil
 }
