@@ -34,6 +34,8 @@ func main() {
 	case "tui":
 		exitCode := runWakeDesk(os.Args[2:])
 		os.Exit(exitCode)
+	case "batch":
+		os.Exit(runBatch(os.Args[2:]))
 	case "scan":
 		exitCode := runScan(os.Args[2:])
 		os.Exit(exitCode)
@@ -163,6 +165,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "Commands:")
 	fmt.Fprintln(os.Stderr, "  wol tui          Open the local Wake Desk")
 	fmt.Fprintln(os.Stderr, "  wol wake         Wake a stored machine or MAC address")
+	fmt.Fprintln(os.Stderr, "  wol batch        Check or wake machines by site or explicit selection")
 	fmt.Fprintln(os.Stderr, "  wol shutdown     Shutdown or schedule power-off for a machine")
 	fmt.Fprintln(os.Stderr, "  wol remote       Open or configure a machine's remote session")
 	fmt.Fprintln(os.Stderr, "  wol status       Check a stored machine's power state")

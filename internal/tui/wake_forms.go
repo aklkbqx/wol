@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/aklkbqx/wol/internal/netutil"
+	"github.com/aklkbqx/wol/internal/wol"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -128,8 +131,15 @@ func (f *wakeForm) setSelected(index int) {
 }
 
 func (m *WakeModel) beginAdd() {
+	if m.tab == 3 {
+		m.beginSite(false)
+		return
+	}
 	if m.tab == 0 {
-		values := make([]string, 9)
+		values := make([]string, 10)
+		if m.siteFilter != "" && m.siteFilter != "unassigned" {
+			values[9] = m.siteName(m.siteFilter)
+		}
 		values[4] = "9"
 		m.form = newWakeForm(deviceForm, "", deviceFormLabels(), values, m.theme)
 		m.status = "Add machine: fill each field and press Enter."
@@ -142,6 +152,10 @@ func (m *WakeModel) beginAdd() {
 }
 
 func (m *WakeModel) beginEdit() {
+	if m.tab == 3 {
+		m.beginSite(true)
+		return
+	}
 	if m.tab == 0 {
 		devices := m.filteredDevices()
 		if len(devices) == 0 {
@@ -152,7 +166,7 @@ func (m *WakeModel) beginEdit() {
 		m.form = newWakeForm(deviceForm, device.ID, deviceFormLabels(), []string{
 			device.Name, device.MACAddress, device.IPAddress, device.BroadcastAddress,
 			strconv.Itoa(device.Port), device.Interface, strconv.Itoa(device.VerifyPort),
-			device.WakeStrategy, device.WakeRelayID,
+			device.WakeStrategy, device.WakeRelayID, m.siteName(device.SiteID),
 		}, m.theme)
 		m.status = "Edit machine: press Enter to advance and save."
 		return
@@ -251,6 +265,12 @@ func (m *WakeModel) beginShutdownForm() {
 }
 
 func (m *WakeModel) beginDelete() {
+	if m.tab == 3 && len(m.sites) > 0 {
+		s := m.sites[min(m.selected, len(m.sites)-1)]
+		m.confirm = "site:" + s.ID
+		m.status = "Delete site " + s.Name + "? Reassign its machines first. y confirms."
+		return
+	}
 	if m.tab == 0 {
 		devices := m.filteredDevices()
 		if len(devices) > 0 {
@@ -281,6 +301,8 @@ func (m *WakeModel) deleteConfirmed() tea.Cmd {
 		var err error
 		if parts[0] == "machine" {
 			err = m.repository.DeleteDevice(ctx, parts[1])
+		} else if parts[0] == "site" {
+			err = m.repository.DeleteSite(ctx, parts[1])
 		} else {
 			err = m.repository.DeleteWakeRelay(ctx, parts[1])
 		}
@@ -298,11 +320,36 @@ func (m *WakeModel) handleFormKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	form.ensureInputs(m.theme)
 	name := msg.String()
+	if name == "ctrl+n" {
+		choices := []string{""}
+		if form.kind == deviceForm && form.selected == 9 {
+			for _, s := range m.sites {
+				choices = append(choices, s.Name)
+			}
+		} else if (form.kind == siteForm && form.selected == 4) || (form.kind == deviceForm && form.selected == 8) {
+			for _, r := range m.relays {
+				choices = append(choices, r.Name)
+			}
+		} else {
+			return nil
+		}
+		i := 0
+		for j, c := range choices {
+			if c == form.values[form.selected] {
+				i = j
+			}
+		}
+		value := choices[(i+1)%len(choices)]
+		form.values[form.selected] = value
+		form.inputs[form.selected].SetValue(value)
+		return nil
+	}
 	if name == "ctrl+c" {
 		m.finishLoadContext()
 		return tea.Quit
 	}
 	if name == "esc" {
+		m.lanQueue = nil
 		m.form = nil
 		m.status = "Edit cancelled."
 		return nil
@@ -311,9 +358,18 @@ func (m *WakeModel) handleFormKey(msg tea.KeyMsg) tea.Cmd {
 		form.setSelected(form.selected - 1)
 		return nil
 	}
+	if name == "tab" || name == "down" || name == "enter" || name == "ctrl+s" {
+		if err := validateFormField(form); err != nil {
+			form.error = err.Error()
+			return nil
+		}
+	}
 	if name == "down" || name == "tab" {
 		form.setSelected(form.selected + 1)
 		return nil
+	}
+	if name == "ctrl+s" {
+		return m.saveForm()
 	}
 	if name == "enter" {
 		if form.saving {
@@ -340,6 +396,8 @@ func (m *WakeModel) saveForm() tea.Cmd {
 		return nil
 	}
 	m.form.saving = true
+	sites := append([]store.Site(nil), m.sites...)
+	relays := append([]store.WakeRelay(nil), m.relays...)
 	form := *m.form
 	form.ensureInputs(m.theme)
 	values := append([]string(nil), form.values...)
@@ -497,6 +555,40 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			return shutdownInitiatedMsg{deviceID: device.ID, deviceName: device.Name}
 		}
 
+		if form.kind == importForm || form.kind == exportForm {
+			if err := inventoryFile(ctx, m.repository, form.kind, values[0]); err != nil {
+				return formSavedMsg{message: err.Error(), keep: true}
+			}
+			return formSavedMsg{message: "Inventory " + string(form.kind) + " complete."}
+		}
+		if form.kind == siteForm {
+			port, e1 := strconv.Atoi(values[5])
+			timeout, e2 := strconv.Atoi(values[6])
+			limit, e3 := strconv.Atoi(values[7])
+			if e1 != nil || e2 != nil || e3 != nil {
+				return formSavedMsg{message: "Port, timeout and concurrency must be numbers.", keep: true}
+			}
+			relayID := ""
+			for _, r := range relays {
+				if r.ID == values[4] || strings.EqualFold(r.Name, values[4]) {
+					relayID = r.ID
+				}
+			}
+			if values[4] != "" && relayID == "" {
+				return formSavedMsg{message: "Relay not found. Add it in Routes first.", keep: true}
+			}
+			item := store.Site{Name: values[0], Subnet: values[1], BroadcastAddress: values[2], DefaultInterface: values[3], WakeRelayID: relayID, DefaultPort: port, TimeoutMS: timeout, Concurrency: limit}
+			var err error
+			if form.id == "" {
+				_, err = m.repository.CreateSite(ctx, item)
+			} else {
+				_, err = m.repository.UpdateSite(ctx, form.id, item)
+			}
+			if err != nil {
+				return formSavedMsg{message: err.Error(), keep: true}
+			}
+			return formSavedMsg{message: "Site saved. Review inherited routes before waking machines."}
+		}
 		port, err := parseFormInt(values[4], 9)
 		if err != nil || strings.TrimSpace(values[0]) == "" || strings.TrimSpace(values[1]) == "" {
 			return formSavedMsg{message: "Machine save failed: name, MAC, and valid port are required.", keep: true}
@@ -530,16 +622,37 @@ func (m *WakeModel) saveForm() tea.Cmd {
 		item.VerifyPort = verifyPort
 		item.WakeStrategy = strategy
 		item.WakeRelayID = strings.TrimSpace(values[8])
+		for _, r := range relays {
+			if strings.EqualFold(r.Name, item.WakeRelayID) {
+				item.WakeRelayID = r.ID
+			}
+		}
+		if len(values) > 9 {
+			oldSiteID := item.SiteID
+			item.SiteID = ""
+			name := strings.TrimSpace(values[9])
+			for _, s := range sites {
+				if s.ID == name || strings.EqualFold(s.Name, name) {
+					item.SiteID = s.ID
+				}
+			}
+			if name == oldSiteID {
+				item.SiteID = oldSiteID
+			}
+			if name != "" && name != "Unassigned" && item.SiteID == "" {
+				return formSavedMsg{message: "Site not found. Add it in Sites first.", keep: true}
+			}
+		}
 		var saveErr error
 		if form.id == "" {
-			_, saveErr = m.repository.CreateDevice(ctx, item)
+			item, saveErr = m.repository.CreateDevice(ctx, item)
 		} else {
-			_, saveErr = m.repository.UpdateDevice(ctx, form.id, item)
+			item, saveErr = m.repository.UpdateDevice(ctx, form.id, item)
 		}
 		if saveErr != nil {
 			return formSavedMsg{message: "Machine save failed: " + saveErr.Error(), keep: true}
 		}
-		return formSavedMsg{message: "Machine saved."}
+		return formSavedMsg{message: "Machine saved.", selectedID: item.ID}
 	}
 }
 
@@ -555,7 +668,7 @@ func parseFormInt(value string, fallback int) (int, error) {
 }
 
 func deviceFormLabels() []string {
-	return []string{"Name", "MAC address", "IP address", "Broadcast", "UDP port", "Interface", "Verify port", "Wake strategy", "Relay ID"}
+	return []string{"Name", "MAC address", "IP address", "Broadcast", "UDP port", "Interface", "Verify port", "Wake strategy", "Relay name (Ctrl+N)", "Site name (Ctrl+N)"}
 }
 
 func relayFormLabels() []string {
@@ -601,7 +714,7 @@ func (m *WakeModel) renderForm(width int) string {
 		start = max(0, end-6)
 	}
 	rows := make([]string, 0, end-start+4)
-	rows = append(rows, m.theme.muted().Render("enter saves   tab moves   esc cancels"), "")
+	rows = append(rows, m.theme.muted().Render("ctrl+s saves   tab moves   esc cancels"), "")
 	if start > 0 {
 		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("%d earlier field(s)", start)))
 	}
@@ -634,4 +747,36 @@ func (m *WakeModel) renderForm(width int) string {
 		title = "power off"
 	}
 	return m.theme.title().Render(title) + "\n" + strings.Join(rows, "\n")
+}
+
+func validateFormField(form *wakeForm) error {
+	if form.selected < 0 || form.selected >= len(form.values) {
+		return nil
+	}
+	value := strings.TrimSpace(form.values[form.selected])
+	if form.selected == 0 && value == "" {
+		return fmt.Errorf("%s is required", form.labels[0])
+	}
+	if form.kind == siteForm && form.selected == 1 && value != "" {
+		_, err := netutil.Broadcast(value)
+		return err
+	}
+	if form.kind != deviceForm {
+		return nil
+	}
+	switch form.selected {
+	case 1:
+		if _, err := wol.ParseMAC(value); err != nil {
+			return fmt.Errorf("enter a valid unicast MAC address")
+		}
+	case 2, 3:
+		if value != "" && net.ParseIP(value).To4() == nil {
+			return fmt.Errorf("enter an IPv4 address, or leave blank")
+		}
+	case 4, 6:
+		if _, err := parseFormInt(value, 0); err != nil {
+			return fmt.Errorf("port must be 0–65535; 0 inherits defaults")
+		}
+	}
+	return nil
 }

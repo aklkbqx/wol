@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/aklkbqx/wol/internal/buildinfo"
+	"github.com/aklkbqx/wol/internal/fleet"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/remoteflow"
 	"github.com/aklkbqx/wol/internal/remoteopen"
@@ -62,6 +63,7 @@ type disconnectResultMsg struct {
 }
 
 type probeResultMsg struct {
+	message   string
 	requestID uint64
 	deviceID  string
 	status    string
@@ -79,6 +81,8 @@ type probeBatchMsg struct {
 }
 
 type lanDiscoverMsg struct {
+	id       uint64
+	ifaces   []string
 	devices  []store.Device
 	profiles []store.RemoteProfile
 	known    []scanner.LANHost
@@ -117,8 +121,9 @@ const (
 )
 
 type formSavedMsg struct {
-	message string
-	keep    bool
+	selectedID string
+	message    string
+	keep       bool
 }
 
 type shutdownInitiatedMsg struct {
@@ -136,15 +141,32 @@ type shutdownVerifyMsg struct {
 // WakeModel is the standalone Wake Desk. It opens SQLite directly and never
 // starts an HTTP server, Vite, or a child service supervisor.
 type WakeModel struct {
-	repository    *store.Store
-	service       *wakeservice.Service
-	wakeAndRemote func(context.Context, store.Device, store.RemoteProfile) error
-	stopRemote    func(string) error
-	streaming     map[string]bool
-	version       string
-	credit        string
-	theme         Theme
-	motion        Motion
+	lastBatchKind     string
+	showBatchResults  bool
+	batchPreviewIndex int
+	selectAfterLoad   string
+	siteFilter        string
+	stateFilter       string
+	marked            map[string]bool
+	batchKind         string
+	batchTargets      []store.Device
+	batchResults      []fleet.Result
+	batchID           uint64
+	batchCancel       context.CancelFunc
+	batchRunning      bool
+	scanDone          int
+	scanTotal         int
+	presenceMessages  map[string]string
+	scanResults       <-chan fleet.Result
+	repository        *store.Store
+	service           *wakeservice.Service
+	wakeAndRemote     func(context.Context, store.Device, store.RemoteProfile) error
+	stopRemote        func(string) error
+	streaming         map[string]bool
+	version           string
+	credit            string
+	theme             Theme
+	motion            Motion
 
 	width          int
 	height         int
@@ -164,6 +186,13 @@ type WakeModel struct {
 	lanUnknown     []presence.Neighbor
 	lanSelected    int
 	lanUpdated     int
+	lanID          uint64
+	lanIface       string
+	lanIfaces      []string
+	lanMarked      map[string]bool
+	lanQueue       []presence.Neighbor
+	lanPrepareID   uint64
+	lanPreparing   bool
 
 	phase         viewPhase
 	loadingKind   loadingKind
@@ -288,14 +317,13 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.failLoading("Could not read the local inventory.")
 		}
 		m.pending = &value
-		if len(value.devices) == 0 {
-			m.commitPending(nil, nil, presence.Summary{})
-			return m, nil
-		}
-		m.loadingStage = stagePresence
-		m.checking = true
-		m.status = fmt.Sprintf("Checking power for %d machine(s)...", len(value.devices))
-		return m, m.startPresenceScan(value.devices, value.requestID, value.kind, m.loadContext)
+		m.commitPending(m.presence, m.presenceMethod, presence.Summary{})
+		return m, m.startPresenceScan(m.devices, value.requestID, value.kind, nil)
+	case siteCheckMsg:
+		m.status = value.message
+		return m, nil
+	case fleetMsg:
+		return m, m.applyFleetMsg(value)
 	case wakeResultMsg:
 		if value.operationID != m.actionID || value.targetID != m.actionTargetID {
 			return m, nil
@@ -395,6 +423,9 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				status += " via " + value.method
 			}
 			m.status = m.deviceName(value.deviceID) + " · power " + status + "."
+			if value.message != "" {
+				m.status += " " + value.message
+			}
 		}
 		return m, nil
 	case probeBatchMsg:
@@ -407,7 +438,17 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commitPending(value.statuses, value.methods, value.summary)
 		return m, nil
 	case lanDiscoverMsg:
+		if value.id != m.lanID {
+			return m, nil
+		}
 		return m, m.applyLANDiscover(value)
+	case lanPrepareMsg:
+		if value.id != m.lanPrepareID {
+			return m, nil
+		}
+		m.lanPreparing = false
+		m.showNeighborForm(value)
+		return m, nil
 	case wakeTickMsg:
 		if value.id != 0 && value.id != m.motionID {
 			return m, nil
@@ -450,12 +491,15 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.presence[value.targetID] = "offline"
 			m.ensureCheckedDevice()
 			m.checkedDevice[value.targetID] = time.Now()
-			m.status = value.targetName + " · ASLEEP after shutdown."
+			m.status = value.targetName + " · unreachable after shutdown; power-off is unconfirmed."
 		} else {
 			m.status = value.targetName + " · shutdown command sent, but machine is still responding. Press s to check again."
 		}
 		return m, nil
 	case formSavedMsg:
+		if value.selectedID != "" {
+			m.selectAfterLoad = value.selectedID
+		}
 		if value.keep && m.form != nil {
 			m.form.error = value.message
 			m.form.saving = false
@@ -463,6 +507,11 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.form = nil
 		}
 		m.status = value.message
+		if !value.keep && len(m.lanQueue) > 0 {
+			next := m.lanQueue[0]
+			m.lanQueue = m.lanQueue[1:]
+			return m, m.beginAddFromLAN(next)
+		}
 		if value.keep {
 			return m, nil
 		}
@@ -476,6 +525,9 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if keyName == "ctrl+c" {
 		if m.actionCancel != nil {
 			m.actionCancel()
+		}
+		if m.batchCancel != nil {
+			m.batchCancel()
 		}
 		m.finishLoadContext()
 		return tea.Quit
@@ -496,12 +548,57 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	}
+	if keyName == "esc" && m.batchRunning {
+		m.batchCancel()
+		m.status = "Cancelling batch; completed results are retained."
+		return nil
+	}
+	if m.batchKind != "" && !m.batchRunning {
+		switch keyName {
+		case "enter", "y":
+			return m.startBatch()
+		case "j", "down":
+			m.batchPreviewIndex = min(m.batchPreviewIndex+1, len(m.batchTargets)-1)
+		case "k", "up":
+			m.batchPreviewIndex = max(0, m.batchPreviewIndex-1)
+		case "esc", "n":
+			m.batchKind = ""
+			m.batchTargets = nil
+			m.status = "Batch cancelled."
+		}
+		return nil
+	}
+	if m.showBatchResults {
+		switch keyName {
+		case "esc", "b", "q":
+			m.showBatchResults = false
+		case "j", "down":
+			m.batchPreviewIndex = min(m.batchPreviewIndex+1, len(m.batchResults)-1)
+		case "k", "up":
+			m.batchPreviewIndex = max(0, m.batchPreviewIndex-1)
+		}
+		return nil
+	}
+	if keyName == "esc" && m.lanPreparing {
+		m.lanPrepareID++
+		m.lanPreparing = false
+		m.lanQueue = nil
+		m.status = "Discovery form cancelled."
+		return nil
+	}
+	if keyName == "esc" && m.checking {
+		m.cancelLoading()
+		return nil
+	}
 	if m.form != nil {
 		return m.handleFormKey(msg)
 	}
 	if (m.waking || m.opening || m.shuttingDown) && (keyName == "q" || keyName == "ctrl+c") {
 		if m.actionCancel != nil {
 			m.actionCancel()
+		}
+		if m.batchCancel != nil {
+			m.batchCancel()
 		}
 		m.finishLoadContext()
 		return tea.Quit
@@ -561,11 +658,22 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	if m.batchRunning && strings.Contains("wcfPedanWrsiESR", keyName) && len(keyName) == 1 {
+		m.status = "Finish or cancel the batch before another machine action."
+		return nil
+	}
 	switch keyName {
 	case "q", "ctrl+c":
+		if m.batchCancel != nil {
+			m.batchCancel()
+		}
+		if m.batchCancel != nil {
+			m.batchCancel()
+		}
+		m.finishLoadContext()
 		return tea.Quit
 	case "tab":
-		m.tab = (m.tab + 1) % 3
+		m.tab = (m.tab + 1) % 4
 		m.selected = 0
 	case "1":
 		m.tab, m.selected = 0, 0
@@ -573,6 +681,36 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.tab, m.selected = 1, 0
 	case "3", "h":
 		m.tab, m.selected = 2, 0
+	case "b":
+		m.showBatchResults = true
+		m.batchPreviewIndex = 0
+		return nil
+	case "4":
+		m.tab, m.selected = 3, 0
+	case "[", "]":
+		m.cycleSite()
+		return nil
+	case "v":
+		m.cycleState()
+		return nil
+	case " ":
+		m.toggleMarked()
+		return nil
+	case "W":
+		m.prepareBatch("wake")
+		return nil
+	case "S":
+		m.prepareBatch("check")
+		return nil
+	case "R":
+		m.retryBatch()
+		return nil
+	case "i":
+		m.beginInventoryFile(false)
+		return nil
+	case "E":
+		m.beginInventoryFile(true)
+		return nil
 	case "j", "down":
 		return m.move(1)
 	case "k", "up":
@@ -594,6 +732,9 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return m.beginWake(true)
 		}
 	case "s":
+		if m.tab == 3 {
+			return m.checkSelectedSite()
+		}
 		if m.tab == 0 {
 			return m.probeSelected()
 		}
@@ -626,9 +767,10 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "?":
 		m.showHelp = true
 	case "esc":
+		m.marked = make(map[string]bool)
 		m.filter = ""
 		m.selected = 0
-		m.status = "Filter cleared."
+		m.status = "Filter and selection cleared."
 	}
 	return nil
 }
@@ -693,6 +835,8 @@ func (m *WakeModel) move(delta int) tea.Cmd {
 	switch m.tab {
 	case 0:
 		count = len(m.filteredDevices())
+	case 3:
+		count = len(m.sites)
 	case 1:
 		count = len(m.relayList())
 	default:
@@ -799,14 +943,27 @@ func (m *WakeModel) View() string {
 		headerParts = append(headerParts, m.theme.danger().Render("STALE"))
 	}
 	headerParts = append(headerParts, m.theme.muted().Render(m.freshnessText()))
+	if m.siteFilter != "" {
+		headerParts = append(headerParts, m.siteName(m.siteFilter))
+	}
+	if m.stateFilter != "" {
+		headerParts = append(headerParts, m.stateFilter)
+	}
+	if len(m.marked) > 0 {
+		headerParts = append(headerParts, fmt.Sprintf("%d selected", len(m.marked)))
+	}
 	builder.WriteString("\n" + fitText(strings.Join(headerParts, "  "), inner) + "\n")
 
 	showTabs := inner >= 36 && (m.height <= 0 || m.height >= 20 || m.tab != 0 || m.form != nil)
 	if showTabs {
-		builder.WriteString(renderTabs(m.theme, m.tab, []string{"machines", "routes", "activity"}, inner) + "\n")
+		builder.WriteString(renderTabs(m.theme, m.tab, []string{"machines", "routes", "activity", "sites"}, inner) + "\n")
 	}
 
-	if m.form != nil {
+	if m.showBatchResults {
+		builder.WriteString("\n" + m.renderBatchResults(inner))
+	} else if m.batchKind != "" && !m.batchRunning {
+		builder.WriteString("\n" + m.renderBatchPreview(inner))
+	} else if m.form != nil {
 		builder.WriteString("\n" + m.renderForm(inner))
 	} else if m.lanOpen && m.tab == 0 {
 		builder.WriteString("\n" + m.renderLANDiscover(inner))
@@ -817,6 +974,8 @@ func (m *WakeModel) View() string {
 			builder.WriteString(m.renderRoutes(inner))
 		case 2:
 			builder.WriteString(m.renderActivity(inner))
+		case 3:
+			builder.WriteString(m.renderSites(inner))
 		default:
 			builder.WriteString(m.renderMachines(inner, mode))
 		}
@@ -851,7 +1010,11 @@ func (m *WakeModel) View() string {
 			"r       refresh",
 			"n       discover LAN",
 			"a e d   add, edit, delete",
-			"tab     machines / routes / activity",
+			"tab     machines / routes / activity / sites",
+			"[ ]     cycle site filter; v cycles status",
+			"space   select machine; W wake selected; S check selected",
+			"R       retry failed batch targets; b views batch results",
+			"i / E   import / export inventory",
 			"/       filter",
 			"q       quit",
 		}, "\n"), inner))

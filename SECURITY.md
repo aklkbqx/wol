@@ -5,7 +5,7 @@ its SQLite inventory, and configured SSH relay keys as administrative access.
 
 ## Safe operation
 
-- The program opens no listening socket and starts no background service.
+- Core inventory/wake commands start no persistent service. Optional browser remote sessions open a temporary loopback listener and Docker sidecars; they stop when the session closes.
 - Keep the inventory database and exports outside source control with
   user-only filesystem permissions.
 - Review broadcast destinations and SSH relay hosts before saving them.
@@ -17,5 +17,7 @@ its SQLite inventory, and configured SSH relay keys as administrative access.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for an undisclosed vulnerability. Contact the
-maintainer privately with a reproduction, affected version, and impact.
+Do not open a public issue for an undisclosed vulnerability. Use GitHub private vulnerability reporting when enabled for this repository.
+Otherwise request a private contact channel through the maintainer profile at
+https://github.com/aklkbqx before sharing technical details. Include the affected
+version, a minimal reproduction and impact; omit credentials and real inventories.

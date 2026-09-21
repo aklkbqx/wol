@@ -24,6 +24,10 @@ type queryable interface {
 }
 
 type Site struct {
+	Subnet           string `json:"subnet,omitempty"`
+	WakeRelayID      string `json:"wakeRelayId,omitempty"`
+	TimeoutMS        int    `json:"timeoutMs,omitempty"`
+	Concurrency      int    `json:"concurrency,omitempty"`
 	ID               string `json:"id"`
 	Name             string `json:"name"`
 	BroadcastAddress string `json:"broadcastAddress"`
@@ -77,7 +81,7 @@ type WakeAttempt struct {
 	CreatedAt          string `json:"createdAt"`
 }
 
-const currentExportVersion = 5
+const currentExportVersion = 6
 
 type ExportData struct {
 	Version        int             `json:"version"`
@@ -252,6 +256,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		name  string
 		def   string
 	}{
+		{table: "sites", name: "subnet", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "sites", name: "wake_relay_id", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "sites", name: "timeout_ms", def: "INTEGER NOT NULL DEFAULT 2500"},
+		{table: "sites", name: "concurrency", def: "INTEGER NOT NULL DEFAULT 4"},
 		{table: "devices", name: "platform", def: "TEXT NOT NULL DEFAULT 'unknown'"},
 		{table: "devices", name: "wake_strategy", def: "TEXT NOT NULL DEFAULT 'broadcast'"},
 		{table: "devices", name: "wake_relay_id", def: "TEXT NOT NULL DEFAULT ''"},
@@ -409,7 +417,7 @@ func (s *Store) ensureColumn(ctx context.Context, table, column, definition stri
 }
 
 func (s *Store) ListSites(ctx context.Context) ([]Site, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, broadcast_address, default_port, default_interface, created_at, updated_at FROM sites ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, broadcast_address, default_port, default_interface, created_at, updated_at, subnet, wake_relay_id, timeout_ms, concurrency FROM sites ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +425,7 @@ func (s *Store) ListSites(ctx context.Context) ([]Site, error) {
 	items := make([]Site, 0)
 	for rows.Next() {
 		var item Site
-		if err := rows.Scan(&item.ID, &item.Name, &item.BroadcastAddress, &item.DefaultPort, &item.DefaultInterface, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.BroadcastAddress, &item.DefaultPort, &item.DefaultInterface, &item.CreatedAt, &item.UpdatedAt, &item.Subnet, &item.WakeRelayID, &item.TimeoutMS, &item.Concurrency); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -427,7 +435,7 @@ func (s *Store) ListSites(ctx context.Context) ([]Site, error) {
 
 func (s *Store) GetSite(ctx context.Context, id string) (Site, error) {
 	var item Site
-	err := s.db.QueryRowContext(ctx, `SELECT id, name, broadcast_address, default_port, default_interface, created_at, updated_at FROM sites WHERE id = ?`, id).Scan(&item.ID, &item.Name, &item.BroadcastAddress, &item.DefaultPort, &item.DefaultInterface, &item.CreatedAt, &item.UpdatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id, name, broadcast_address, default_port, default_interface, created_at, updated_at, subnet, wake_relay_id, timeout_ms, concurrency FROM sites WHERE id = ?`, id).Scan(&item.ID, &item.Name, &item.BroadcastAddress, &item.DefaultPort, &item.DefaultInterface, &item.CreatedAt, &item.UpdatedAt, &item.Subnet, &item.WakeRelayID, &item.TimeoutMS, &item.Concurrency)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Site{}, ErrNotFound
 	}
@@ -435,6 +443,11 @@ func (s *Store) GetSite(ctx context.Context, id string) (Site, error) {
 }
 
 func (s *Store) CreateSite(ctx context.Context, item Site) (Site, error) {
+	normalized, validationErr := normalizeSite(item)
+	if validationErr != nil {
+		return Site{}, validationErr
+	}
+	item = normalized
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	item.ID = newID("site")
 	item.CreatedAt = now
@@ -442,7 +455,7 @@ func (s *Store) CreateSite(ctx context.Context, item Site) (Site, error) {
 	if item.DefaultPort == 0 {
 		item.DefaultPort = 9
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO sites (id, name, broadcast_address, default_port, default_interface, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.CreatedAt, item.UpdatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO sites (id, name, broadcast_address, default_port, default_interface, created_at, updated_at, subnet, wake_relay_id, timeout_ms, concurrency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.CreatedAt, item.UpdatedAt, item.Subnet, item.WakeRelayID, item.TimeoutMS, item.Concurrency)
 	if err != nil {
 		return Site{}, normalizeDBError(err)
 	}
@@ -450,8 +463,13 @@ func (s *Store) CreateSite(ctx context.Context, item Site) (Site, error) {
 }
 
 func (s *Store) UpdateSite(ctx context.Context, id string, item Site) (Site, error) {
+	normalized, validationErr := normalizeSite(item)
+	if validationErr != nil {
+		return Site{}, validationErr
+	}
+	item = normalized
 	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `UPDATE sites SET name = ?, broadcast_address = ?, default_port = ?, default_interface = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.UpdatedAt, id)
+	result, err := s.db.ExecContext(ctx, `UPDATE sites SET name = ?, broadcast_address = ?, default_port = ?, default_interface = ?, updated_at = ?, subnet = ?, wake_relay_id = ?, timeout_ms = ?, concurrency = ? WHERE id = ?`, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.UpdatedAt, item.Subnet, item.WakeRelayID, item.TimeoutMS, item.Concurrency, id)
 	if err != nil {
 		return Site{}, normalizeDBError(err)
 	}
@@ -462,6 +480,13 @@ func (s *Store) UpdateSite(ctx context.Context, id string, item Site) (Site, err
 }
 
 func (s *Store) DeleteSite(ctx context.Context, id string) error {
+	var used int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM devices WHERE site_id=?", id).Scan(&used); err != nil {
+		return err
+	}
+	if used > 0 {
+		return fmt.Errorf("site is assigned to %d machines; reassign them before deleting", used)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -821,6 +846,13 @@ func (s *Store) Import(ctx context.Context, data ExportData) error {
 
 	siteIDs := make(map[string]string, len(data.Sites))
 	for _, site := range data.Sites {
+		if site.WakeRelayID != "" {
+			mapped, ok := relayIDs[site.WakeRelayID]
+			if !ok {
+				return fmt.Errorf("site references unknown relay %q", site.WakeRelayID)
+			}
+			site.WakeRelayID = mapped
+		}
 		originalID := site.ID
 		imported, err := s.upsertSiteOn(ctx, tx, site)
 		if err != nil {
@@ -902,6 +934,11 @@ func (s *Store) upsertGroup(ctx context.Context, item Group) error {
 }
 
 func (s *Store) upsertSiteOn(ctx context.Context, q queryable, item Site) (Site, error) {
+	normalized, validationErr := normalizeSite(item)
+	if validationErr != nil {
+		return Site{}, validationErr
+	}
+	item = normalized
 	var existingID string
 	err := q.QueryRowContext(ctx, `SELECT id FROM sites WHERE name = ?`, item.Name).Scan(&existingID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -912,7 +949,7 @@ func (s *Store) upsertSiteOn(ctx context.Context, q queryable, item Site) (Site,
 		if item.DefaultPort == 0 {
 			item.DefaultPort = 9
 		}
-		_, err = q.ExecContext(ctx, `INSERT INTO sites (id, name, broadcast_address, default_port, default_interface, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.CreatedAt, item.UpdatedAt)
+		_, err = q.ExecContext(ctx, `INSERT INTO sites (id, name, broadcast_address, default_port, default_interface, created_at, updated_at, subnet, wake_relay_id, timeout_ms, concurrency) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.CreatedAt, item.UpdatedAt, item.Subnet, item.WakeRelayID, item.TimeoutMS, item.Concurrency)
 		if err != nil {
 			return Site{}, normalizeDBError(err)
 		}
@@ -925,7 +962,7 @@ func (s *Store) upsertSiteOn(ctx context.Context, q queryable, item Site) (Site,
 	if item.DefaultPort == 0 {
 		item.DefaultPort = 9
 	}
-	result, err := q.ExecContext(ctx, `UPDATE sites SET name = ?, broadcast_address = ?, default_port = ?, default_interface = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.UpdatedAt, existingID)
+	result, err := q.ExecContext(ctx, `UPDATE sites SET name = ?, broadcast_address = ?, default_port = ?, default_interface = ?, updated_at = ?, subnet = ?, wake_relay_id = ?, timeout_ms = ?, concurrency = ? WHERE id = ?`, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.UpdatedAt, item.Subnet, item.WakeRelayID, item.TimeoutMS, item.Concurrency, existingID)
 	if err != nil {
 		return Site{}, normalizeDBError(err)
 	}

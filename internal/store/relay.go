@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -119,6 +120,13 @@ func (s *Store) UpdateWakeRelay(ctx context.Context, id string, item WakeRelay) 
 }
 
 func (s *Store) DeleteWakeRelay(ctx context.Context, id string) error {
+	var used int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM sites WHERE wake_relay_id=?", id).Scan(&used); err != nil {
+		return err
+	}
+	if used > 0 {
+		return fmt.Errorf("relay is used by %d sites; change their wake routes first", used)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

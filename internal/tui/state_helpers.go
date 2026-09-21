@@ -14,12 +14,19 @@ import (
 
 func (m *WakeModel) filteredDevices() []store.Device {
 	filter := strings.ToLower(strings.TrimSpace(m.filter))
-	if filter == "" {
-		return append([]store.Device(nil), m.devices...)
-	}
+
 	items := make([]store.Device, 0)
 	for _, item := range m.devices {
-		text := strings.ToLower(strings.Join([]string{item.Name, item.MACAddress, item.IPAddress, item.WakeRelayID}, " "))
+		if m.siteFilter == "unassigned" && item.SiteID != "" {
+			continue
+		}
+		if m.siteFilter != "" && m.siteFilter != "unassigned" && item.SiteID != m.siteFilter {
+			continue
+		}
+		if m.stateFilter != "" && !strings.EqualFold(m.deviceState(item), m.stateFilter) {
+			continue
+		}
+		text := strings.ToLower(strings.Join([]string{item.Name, item.MACAddress, item.IPAddress, item.WakeRelayID, m.siteName(item.SiteID)}, " "))
 		if strings.Contains(text, filter) {
 			items = append(items, item)
 		}
@@ -72,6 +79,13 @@ type wakeCapability struct {
 }
 
 func (m *WakeModel) wakeCapability(device store.Device) wakeCapability {
+	if device.WakeRelayID == "" {
+		for _, s := range m.sites {
+			if s.ID == device.SiteID {
+				device.WakeRelayID = s.WakeRelayID
+			}
+		}
+	}
 	if !device.Enabled {
 		return wakeCapability{state: "BLOCKED", detail: "machine disabled (use f to force)"}
 	}
@@ -143,7 +157,7 @@ func powerWord(state string) string {
 	case "ONLINE":
 		return "online"
 	case "OFFLINE":
-		return "asleep"
+		return "unreachable"
 	case "DISABLED":
 		return "off"
 	case "CHECKING":
@@ -195,6 +209,13 @@ func (m *WakeModel) remoteSummary(devices []store.Device) (configured, setup int
 }
 
 func (m *WakeModel) routeText(device store.Device) string {
+	if device.WakeRelayID == "" {
+		for _, s := range m.sites {
+			if s.ID == device.SiteID {
+				device.WakeRelayID = s.WakeRelayID
+			}
+		}
+	}
 	if strings.EqualFold(device.WakeStrategy, "relay") || device.WakeRelayID != "" {
 		if device.WakeRelayID == "" {
 			return "relay missing"

@@ -7,39 +7,43 @@ not require a web application or hosted service.
 ```text
  wol  checked 05:27:04
 
- 3 machines  1 online  1 asleep  1 unknown
+ 3 machines  1 online  1 unreachable  1 unknown
 
  › windows     online    stream
    private     unknown   stream
-   private2    asleep    setup
+   private2    unreachable    setup
  192.168.50.200  00:11:22:33:44:55  LAN 192.168.50.255:9
 
 
  enter choose   w wake   c stream   s check   x stop   ? help   q quit
 ```
 
-Power and wake readiness are intentionally separate: `OFFLINE + READY` is the
+Power and wake readiness are intentionally separate: `UNREACHABLE + CONFIGURED` is the
 normal state for a machine that can be woken.
 
 ## Install
 
-Requires Go 1.26.6 or newer:
+Download the archive for your operating system and architecture from
+[Releases](https://github.com/aklkbqx/wol/releases), verify its SHA256SUMS when
+provided, extract it, and place the executable on PATH. See the release notes
+for the platforms actually verified for that version.
 
-```bash
-go install github.com/aklkbqx/wol/cmd/wol@latest
+To build the development version, install Go 1.26.6 or newer, clone this repo,
+and run:
+
+```sh
+make verify
+make install BINDIR="$HOME/.local/bin"
 ```
 
-Or build and install from a clone:
+Add that directory to PATH if needed. `make install` uses the same native build
+and macOS packaging as `make build`. A plain `go install` does not perform those
+macOS packaging steps. Wake and inventory need no Docker or background service;
+optional browser remote sessions use Docker.
 
-```bash
-make test
-make install
-```
-
-The executable is installed to `$(go env GOPATH)/bin/wol`. Wake features need
-no Node.js, MongoDB, Docker, or background service. Browser-based local remote
-sessions use Docker only when you select **Wake & Remote**; see
-[Local remote sessions](#local-remote-sessions).
+See [Homelab quick start](docs/homelab.md),
+[Troubleshooting](docs/troubleshooting.md), and
+[Development and release](docs/development.md).
 
 ## Use
 
@@ -125,7 +129,11 @@ wake configuration. WOL never sends this remote flow to a hosted endpoint.
 - `n`: discover LAN neighbors and add new hosts
 - `f`: force wake a disabled machine
 - `a/e/d`: add, edit, delete
-- `1/2/3`: machines, routes, activity
+- `1/2/3/4`: machines, routes, activity, sites
+- `[` / `]`: cycle site filter; `v`: cycle status filter
+- `Space`: select machines; `S` / `W`: review batch check / wake
+- `R`: retry unsuccessful batch targets
+- `i` / `E`: import / export inventory; `Ctrl+S`: save a form
 - `/`: filter
 - `?`: help
 - `q`: quit
@@ -133,10 +141,10 @@ wake configuration. WOL never sends this remote flow to a hosted endpoint.
 The action picker always presents **Wake only** and **Wake & Remote** as
 separate choices. The latter is disabled until the selected machine has a
 valid remote profile. The interface adapts to narrow, compact, and wide
-terminals. On startup, refresh, and a selected-machine power check, Wake Desk
-shows a focused checking screen and reveals the fleet only after the complete
-snapshot is verified. A failed refresh keeps the last verified snapshot and
-marks it stale; `Esc` cancels an in-progress refresh or power check. Motion is
+terminals. Inventory appears as soon as it is read. Startup and refresh checks update
+machines incrementally while navigation remains available. A failed inventory
+refresh preserves the previous data. `Esc` cancels a check or batch; obsolete
+results are ignored. Motion is
 limited to active work such as verification, wake, or local remote startup.
 Use `WOL_TUI_REDUCED_MOTION=1` or `WOL_TUI_MOTION=off` to disable it,
 `WOL_TUI_ASCII=1` for ASCII glyphs, and `NO_COLOR=1` to disable color.

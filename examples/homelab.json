@@ -1,0 +1,61 @@
+{
+  "version": 6,
+  "sites": [
+    {
+      "id": "home",
+      "name": "Home",
+      "subnet": "10.80.0.0/24",
+      "broadcastAddress": "",
+      "defaultPort": 9,
+      "defaultInterface": "",
+      "timeoutMs": 2500,
+      "concurrency": 4
+    },
+    {
+      "id": "lab",
+      "name": "Lab",
+      "subnet": "10.81.0.0/23",
+      "broadcastAddress": "",
+      "defaultPort": 9,
+      "defaultInterface": "",
+      "wakeRelayId": "lab-router",
+      "timeoutMs": 3000,
+      "concurrency": 2
+    },
+    {
+      "id": "office",
+      "name": "Office",
+      "subnet": "10.82.0.0/16",
+      "broadcastAddress": "",
+      "defaultPort": 9,
+      "defaultInterface": "",
+      "timeoutMs": 3000,
+      "concurrency": 2
+    }
+  ],
+  "wakeRelays": [
+    {
+      "id": "lab-router",
+      "name": "Lab router",
+      "address": "10.81.0.1",
+      "port": 22,
+      "interface": "br-lan",
+      "transport": "ssh_etherwake",
+      "enabled": true
+    }
+  ],
+  "devices": [
+    {
+      "id": "demo-pc",
+      "name": "demo-pc",
+      "macAddress": "02:00:00:00:00:01",
+      "ipAddress": "10.80.0.10",
+      "siteId": "home",
+      "enabled": true,
+      "verifyPort": 3389,
+      "platform": "windows",
+      "wakeStrategy": "broadcast"
+    }
+  ],
+  "groups": []
+}

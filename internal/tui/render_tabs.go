@@ -21,7 +21,9 @@ func (m *WakeModel) renderRoutes(width int) string {
 	if len(m.relays) == 0 {
 		rows = append(rows, fitText("no routes. press a to add a relay.", width))
 	} else {
-		for i, relay := range m.relays {
+		start, end := m.listWindow(len(m.relays))
+		for i := start; i < end; i++ {
+			relay := m.relays[i]
 			marker := " "
 			name := fitText(relay.Name, max(4, min(18, width/3)))
 			if i == m.selected {
@@ -43,7 +45,9 @@ func (m *WakeModel) renderActivity(width int) string {
 	if len(m.history) == 0 {
 		rows = append(rows, fitText("no wake activity yet", width))
 	} else {
-		for i, attempt := range m.history {
+		start, end := m.listWindow(len(m.history))
+		for i := start; i < end; i++ {
+			attempt := m.history[i]
 			marker := " "
 			target := fitText(attempt.TargetName, max(4, min(16, width/3)))
 			if i == m.selected {
@@ -62,15 +66,12 @@ func (m *WakeModel) renderActivity(width int) string {
 
 func (m *WakeModel) footer(width int) string {
 	if m.theme.ASCII || width < 48 {
-		return fitText(m.theme.muted().Render("enter choose   w wake   c stream   s check   n lan   x stop   ? help   q quit"), width)
+		return fitText(m.theme.muted().Render("enter choose   space select   / search   ? help   q quit"), width)
 	}
 	shortcuts := []struct{ key, label string }{
 		{"enter", "choose"},
-		{"w", "wake"},
-		{"c", "stream"},
-		{"s", "check"},
-		{"n", "lan"},
-		{"x", "stop"},
+		{"space", "select"},
+		{"/", "search"},
 		{"?", "help"},
 		{"q", "quit"},
 	}

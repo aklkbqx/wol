@@ -90,6 +90,9 @@ func (s *Service) ResolveRoute(ctx context.Context, device store.Device) (Route,
 			return Route{}, err
 		}
 		if site.ID != "" {
+			if device.WakeRelayID == "" {
+				device.WakeRelayID = site.WakeRelayID
+			}
 			if destination == "" {
 				destination = strings.TrimSpace(site.BroadcastAddress)
 			}
