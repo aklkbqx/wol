@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -230,9 +233,14 @@ func RunWakeDesk(dbPath string) error {
 	model.stopRemote = func(deviceID string) error {
 		return remoteManager.Stop(deviceID)
 	}
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err = program.Run()
-	return err
+	if err != nil && !errors.Is(err, tea.ErrInterrupted) && !errors.Is(err, tea.ErrProgramKilled) {
+		return err
+	}
+	return nil
 }
 
 func (m *WakeModel) Init() tea.Cmd {
@@ -241,6 +249,12 @@ func (m *WakeModel) Init() tea.Cmd {
 
 func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch value := msg.(type) {
+	case tea.InterruptMsg:
+		if m.actionCancel != nil {
+			m.actionCancel()
+		}
+		m.finishLoadContext()
+		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = value.Width, value.Height
 		return m, nil

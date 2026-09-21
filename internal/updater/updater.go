@@ -105,9 +105,7 @@ func NewClient(currentVersion string, opts ...Option) *Client {
 	c := &Client{
 		CurrentVersion: currentVersion,
 		Repo:           DefaultRepo,
-		HTTPClient: &http.Client{
-			Timeout: DefaultTimeout,
-		},
+		HTTPClient: &http.Client{},
 		BaseAPIURL: "https://api.github.com",
 		BaseWebURL: "https://github.com",
 	}
@@ -266,24 +264,26 @@ func (c *Client) FetchReleaseByTag(ctx context.Context, tag string) (*Release, e
 	req.Header.Set("User-Agent", "wol-updater/"+c.CurrentVersion)
 
 	resp, err := c.HTTPClient.Do(req)
-	if err == nil && resp.StatusCode == http.StatusOK {
-		defer resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("fetch release %s: %w", normTag, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusOK {
 		var release Release
 		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
 			return nil, fmt.Errorf("decode release metadata: %w", err)
 		}
 		return &release, nil
 	}
-
-	if resp != nil {
-		_ = resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return &Release{
+			Tag:     normTag,
+			Name:    normTag,
+			HTMLURL: fmt.Sprintf("%s/%s/releases/tag/%s", c.BaseWebURL, c.Repo, normTag),
+		}, nil
 	}
-
-	return &Release{
-		Tag:     normTag,
-		Name:    normTag,
-		HTMLURL: fmt.Sprintf("%s/%s/releases/tag/%s", c.BaseWebURL, c.Repo, normTag),
-	}, nil
+	return nil, fmt.Errorf("github returned HTTP %d for release %s", resp.StatusCode, normTag)
 }
 
 // UpdateOptions controls the behavior of an update operation.

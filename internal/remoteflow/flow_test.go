@@ -40,6 +40,47 @@ func TestOpenUsesOnlyGeneratedLocalSession(t *testing.T) {
 	}
 }
 
+func TestOpenAfterCloseDoesNotPublishSession(t *testing.T) {
+	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	device, err := repository.CreateDevice(t.Context(), store.Device{Name: "windows", MACAddress: "00:11:22:33:44:66", IPAddress: "192.168.50.201", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := store.RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}
+	manager := New(repository, func(context.Context, string) error { return nil })
+	manager.probe = func(context.Context, string, int) bool { return true }
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	manager.start = func(_ context.Context, _ localremote.Config) (*localremote.Session, error) {
+		close(started)
+		<-release
+		return &localremote.Session{URL: "http://127.0.0.1:9/s/late"}, nil
+	}
+
+	go func() {
+		_, openErr := manager.Open(t.Context(), device, profile, false)
+		done <- openErr
+	}()
+	<-started
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if openErr := <-done; openErr == nil {
+		t.Fatal("expected open after close to fail")
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.sessions) != 0 {
+		t.Fatalf("closed manager published a session: %+v", manager.sessions)
+	}
+}
+
 func TestProbeRequiresAcceptingRemoteService(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {

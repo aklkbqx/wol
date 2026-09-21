@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -66,16 +67,13 @@ func SendEtherwake(ctx context.Context, relay store.WakeRelay, mac net.HardwareA
 	return RelayResult{Packets: 1, Detail: strings.TrimSpace(string(output))}, nil
 }
 
+var relayTokenPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+
 func safeSSHToken(value string) bool {
 	if value == "" || strings.HasPrefix(value, "-") {
 		return false
 	}
-	for _, r := range value {
-		if r <= ' ' || strings.ContainsRune("'\";&|$`\\<>\n\r", r) {
-			return false
-		}
-	}
-	return true
+	return relayTokenPattern.MatchString(value)
 }
 
 type relayError string

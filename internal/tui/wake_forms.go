@@ -464,7 +464,6 @@ func (m *WakeModel) saveForm() tea.Cmd {
 				Target: target,
 				Delay:  delay,
 				Cancel: cancel,
-				Force:  true,
 			})
 
 			statusStr := "sent"

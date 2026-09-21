@@ -36,6 +36,7 @@ type Repository interface {
 	DeleteWakeRelay(context.Context, string) error
 
 	GetPowerProfile(context.Context, string) (PowerProfile, error)
+	ListPowerProfiles(context.Context) ([]PowerProfile, error)
 	UpsertPowerProfile(context.Context, PowerProfile) (PowerProfile, error)
 	DeletePowerProfile(context.Context, string) error
 	RecordPowerAttempt(context.Context, PowerAttempt) (PowerAttempt, error)

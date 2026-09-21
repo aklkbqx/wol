@@ -187,7 +187,7 @@ func TestPortableExportImportsRelayReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data.Version != 4 || len(data.Devices) != 1 || len(data.WakeRelays) != 1 || len(data.RemoteProfiles) != 1 {
+	if data.Version != currentExportVersion || len(data.Devices) != 1 || len(data.WakeRelays) != 1 || len(data.RemoteProfiles) != 1 {
 		t.Fatalf("unexpected export: %+v", data)
 	}
 
@@ -213,6 +213,100 @@ func TestPortableExportImportsRelayReferences(t *testing.T) {
 	}
 	if len(devices) != 1 || len(relays) != 1 || len(profiles) != 1 || devices[0].WakeRelayID != relays[0].ID || profiles[0].DeviceID != devices[0].ID || profiles[0].Port != 3389 || profiles[0].VerifyPort != 3389 {
 		t.Fatalf("relay reference was not remapped: devices=%+v relays=%+v", devices, relays)
+	}
+}
+
+func TestPortableExportImportsSitesAndPowerProfiles(t *testing.T) {
+	source, err := Open(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	site, err := source.CreateSite(t.Context(), Site{Name: "lan", BroadcastAddress: "192.168.50.255"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := source.CreateDevice(t.Context(), Device{Name: "box", MACAddress: "02:00:00:00:00:5e", IPAddress: "192.168.50.20", SiteID: site.ID, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.UpsertPowerProfile(t.Context(), PowerProfile{DeviceID: device.ID, SSHUser: "admin", SSHPort: 2222, Platform: "linux", UseSudo: true, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := source.Export(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data.Version != currentExportVersion || len(data.Sites) != 1 || len(data.PowerProfiles) != 1 {
+		t.Fatalf("unexpected export: %+v", data)
+	}
+
+	target, err := Open(filepath.Join(t.TempDir(), "target.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err := target.Import(t.Context(), data); err != nil {
+		t.Fatal(err)
+	}
+	sites, err := target.ListSites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices, err := target.ListDevices(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profiles, err := target.ListPowerProfiles(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sites) != 1 || len(devices) != 1 || len(profiles) != 1 {
+		t.Fatalf("imported counts: sites=%d devices=%d profiles=%d", len(sites), len(devices), len(profiles))
+	}
+	if devices[0].SiteID != sites[0].ID {
+		t.Fatalf("site id was not remapped: device=%+v site=%+v", devices[0], sites[0])
+	}
+	if profiles[0].DeviceID != devices[0].ID || profiles[0].SSHUser != "admin" || profiles[0].SSHPort != 2222 || profiles[0].Platform != "linux" || !profiles[0].UseSudo {
+		t.Fatalf("power profile was not imported: %+v", profiles[0])
+	}
+}
+
+func TestImportRollsBackOnInvalidRemoteProfile(t *testing.T) {
+	source, err := Open(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := source.CreateDevice(t.Context(), Device{Name: "box", MACAddress: "02:00:00:00:00:5f", IPAddress: "192.168.50.21", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := source.Export(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data.RemoteProfiles = []RemoteProfile{{
+		DeviceID: "missing-device",
+		Protocol: "rdp",
+		Host:     "192.168.50.21",
+		Mode:     "browser-local",
+		Enabled:  true,
+	}}
+
+	target, err := Open(filepath.Join(t.TempDir(), "target.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if err := target.Import(t.Context(), data); err == nil {
+		t.Fatal("expected import to fail")
+	}
+	devices, err := target.ListDevices(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 0 {
+		t.Fatalf("partial import was committed: %+v", devices)
 	}
 }
 

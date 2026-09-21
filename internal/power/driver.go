@@ -17,14 +17,15 @@ const (
 
 // NormalizePlatform returns the normalized platform identifier.
 func NormalizePlatform(val string) Platform {
-	clean := strings.ToLower(strings.TrimSpace(val))
-	switch clean {
+	switch strings.ToLower(strings.TrimSpace(val)) {
 	case "win", "windows":
 		return PlatformWindows
+	case "linux":
+		return PlatformLinux
 	case "darwin", "mac", "macos", "osx":
 		return PlatformDarwin
 	default:
-		return PlatformLinux
+		return ""
 	}
 }
 
@@ -46,11 +47,11 @@ func (d WindowsDriver) BuildShutdownCommand(delay time.Duration, force bool) str
 	if force {
 		flag += " /f"
 	}
-	return fmt.Sprintf("shutdown %s /t %d", flag, seconds)
+	return fmt.Sprintf("shutdown.exe %s /t %d", flag, seconds)
 }
 
 func (d WindowsDriver) BuildCancelCommand() string {
-	return "shutdown /a"
+	return "shutdown.exe /a"
 }
 
 // LinuxDriver formats shutdown commands for Linux hosts.
@@ -114,6 +115,8 @@ func NewDriver(platform string, useSudo bool) Driver {
 		return WindowsDriver{}
 	case PlatformDarwin:
 		return DarwinDriver{UseSudo: useSudo}
+	case PlatformLinux:
+		return LinuxDriver{UseSudo: useSudo}
 	default:
 		return LinuxDriver{UseSudo: useSudo}
 	}

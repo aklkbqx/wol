@@ -50,10 +50,30 @@ func normalizePowerProfile(item *PowerProfile) {
 
 // GetPowerProfile returns the stored power profile for a device.
 func (s *Store) GetPowerProfile(ctx context.Context, deviceID string) (PowerProfile, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, device_id, ssh_user, ssh_port, ssh_key, platform, use_sudo, enabled, created_at, updated_at FROM power_profiles WHERE device_id = ?`, strings.TrimSpace(deviceID))
+	return scanPowerProfile(s.db.QueryRowContext(ctx, `SELECT id, device_id, ssh_user, ssh_port, ssh_key, platform, use_sudo, enabled, created_at, updated_at FROM power_profiles WHERE device_id = ?`, strings.TrimSpace(deviceID)))
+}
+
+func (s *Store) ListPowerProfiles(ctx context.Context) ([]PowerProfile, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, device_id, ssh_user, ssh_port, ssh_key, platform, use_sudo, enabled, created_at, updated_at FROM power_profiles ORDER BY device_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]PowerProfile, 0)
+	for rows.Next() {
+		item, err := scanPowerProfile(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanPowerProfile(scanner interface{ Scan(...any) error }) (PowerProfile, error) {
 	var item PowerProfile
 	var useSudo, enabled int
-	err := row.Scan(&item.ID, &item.DeviceID, &item.SSHUser, &item.SSHPort, &item.SSHKey, &item.Platform, &useSudo, &enabled, &item.CreatedAt, &item.UpdatedAt)
+	err := scanner.Scan(&item.ID, &item.DeviceID, &item.SSHUser, &item.SSHPort, &item.SSHKey, &item.Platform, &useSudo, &enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PowerProfile{}, ErrNotFound
 	}
@@ -101,6 +121,37 @@ func (s *Store) UpsertPowerProfile(ctx context.Context, item PowerProfile) (Powe
 		return PowerProfile{}, normalizeDBError(err)
 	}
 	return s.GetPowerProfile(ctx, item.DeviceID)
+}
+
+func (s *Store) upsertPowerProfileOn(ctx context.Context, q queryable, item PowerProfile) (PowerProfile, error) {
+	item.DeviceID = strings.TrimSpace(item.DeviceID)
+	if item.DeviceID == "" {
+		return PowerProfile{}, errors.New("power profile device ID is required")
+	}
+	normalizePowerProfile(&item)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var existingID, createdAt string
+	err := q.QueryRowContext(ctx, `SELECT id, created_at FROM power_profiles WHERE device_id = ?`, item.DeviceID).Scan(&existingID, &createdAt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if item.ID == "" {
+			item.ID = newID("power")
+		}
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		_, err = q.ExecContext(ctx, `INSERT INTO power_profiles (id, device_id, ssh_user, ssh_port, ssh_key, platform, use_sudo, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.DeviceID, item.SSHUser, item.SSHPort, item.SSHKey, item.Platform, boolInt(item.UseSudo), boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+	case err != nil:
+		return PowerProfile{}, err
+	default:
+		item.ID = existingID
+		item.CreatedAt = createdAt
+		item.UpdatedAt = now
+		_, err = q.ExecContext(ctx, `UPDATE power_profiles SET ssh_user = ?, ssh_port = ?, ssh_key = ?, platform = ?, use_sudo = ?, enabled = ?, updated_at = ? WHERE device_id = ?`, item.SSHUser, item.SSHPort, item.SSHKey, item.Platform, boolInt(item.UseSudo), boolInt(item.Enabled), item.UpdatedAt, item.DeviceID)
+	}
+	if err != nil {
+		return PowerProfile{}, normalizeDBError(err)
+	}
+	return scanPowerProfile(q.QueryRowContext(ctx, `SELECT id, device_id, ssh_user, ssh_port, ssh_key, platform, use_sudo, enabled, created_at, updated_at FROM power_profiles WHERE device_id = ?`, item.DeviceID))
 }
 
 // DeletePowerProfile removes the power profile for a device.

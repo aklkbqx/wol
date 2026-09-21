@@ -207,6 +207,47 @@ func (s *Store) UpsertRemoteProfile(ctx context.Context, item RemoteProfile) (Re
 	return s.GetRemoteProfile(ctx, item.DeviceID)
 }
 
+func (s *Store) upsertRemoteProfileOn(ctx context.Context, q queryable, item RemoteProfile) (RemoteProfile, error) {
+	item.DeviceID = strings.TrimSpace(item.DeviceID)
+	if strings.TrimSpace(item.Host) == "" {
+		var ip string
+		if err := q.QueryRowContext(ctx, `SELECT ip_address FROM devices WHERE id = ?`, item.DeviceID).Scan(&ip); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return RemoteProfile{}, fmt.Errorf("remote profile device: %w", ErrNotFound)
+			}
+			return RemoteProfile{}, err
+		}
+		item.Host = ip
+	}
+	item, err := normalizeRemoteProfile(item)
+	if err != nil {
+		return RemoteProfile{}, err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var existingID, createdAt string
+	err = q.QueryRowContext(ctx, `SELECT id, created_at FROM remote_profiles WHERE device_id = ?`, item.DeviceID).Scan(&existingID, &createdAt)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		if item.ID == "" {
+			item.ID = newID("remote")
+		}
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		_, err = q.ExecContext(ctx, `INSERT INTO remote_profiles (id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, app_name, fps, resolution, bitrate_kbps, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.DeviceID, item.Protocol, item.Host, item.Port, item.VerifyPort, item.UsernameHint, item.DomainHint, item.CertificatePolicy, item.Mode, item.AppName, item.FPS, item.Resolution, item.BitrateKbps, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+	case err != nil:
+		return RemoteProfile{}, err
+	default:
+		item.ID = existingID
+		item.CreatedAt = createdAt
+		item.UpdatedAt = now
+		_, err = q.ExecContext(ctx, `UPDATE remote_profiles SET protocol = ?, host = ?, port = ?, verify_port = ?, username_hint = ?, domain_hint = ?, certificate_policy = ?, mode = ?, app_name = ?, fps = ?, resolution = ?, bitrate_kbps = ?, enabled = ?, updated_at = ? WHERE device_id = ?`, item.Protocol, item.Host, item.Port, item.VerifyPort, item.UsernameHint, item.DomainHint, item.CertificatePolicy, item.Mode, item.AppName, item.FPS, item.Resolution, item.BitrateKbps, boolInt(item.Enabled), item.UpdatedAt, item.DeviceID)
+	}
+	if err != nil {
+		return RemoteProfile{}, normalizeDBError(err)
+	}
+	return scanRemoteProfile(q.QueryRowContext(ctx, `SELECT id, device_id, protocol, host, port, verify_port, username_hint, domain_hint, certificate_policy, mode, app_name, fps, resolution, bitrate_kbps, enabled, created_at, updated_at FROM remote_profiles WHERE device_id = ?`, item.DeviceID))
+}
+
 func (s *Store) DeleteRemoteProfile(ctx context.Context, deviceID string) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM remote_profiles WHERE device_id = ?`, strings.TrimSpace(deviceID))
 	if err != nil {

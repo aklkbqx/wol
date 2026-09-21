@@ -77,7 +77,27 @@ func (s *Service) Execute(ctx context.Context, req Request) (Result, error) {
 		return Result{}, errors.New("remote target user contains unsafe characters")
 	}
 
-	driver := NewDriver(req.Target.Platform, req.Target.UseSudo)
+	platform := NormalizePlatform(req.Target.Platform)
+	if platform == "" {
+		return Result{}, errors.New("target platform must be windows, linux, or darwin")
+	}
+	if req.Force && platform != PlatformWindows {
+		return Result{}, errors.New("force is only supported on Windows")
+	}
+	if req.Delay > 0 && !req.Cancel {
+		switch platform {
+		case PlatformWindows:
+			if int(req.Delay.Seconds()) < 1 {
+				return Result{}, errors.New("windows delay must be at least 1s")
+			}
+		default:
+			if req.Delay < time.Minute || req.Delay%time.Minute != 0 {
+				return Result{}, errors.New("linux/darwin delay must be a whole number of minutes (e.g. 15m, 1h)")
+			}
+		}
+	}
+
+	driver := NewDriver(string(platform), req.Target.UseSudo)
 	var command string
 	var action Action
 	var scheduledTime time.Time
@@ -129,7 +149,7 @@ func DefaultSSHRunner(ctx context.Context, target Target, command string) (strin
 
 	if target.KeyPath != "" {
 		keyPath := strings.TrimSpace(target.KeyPath)
-		if strings.HasPrefix(keyPath, "-") || !safeSSHToken(keyPath) {
+		if strings.HasPrefix(keyPath, "-") || !safeSSHPath(keyPath) {
 			return "", fmt.Errorf("unsafe ssh key path")
 		}
 		args = append(args, "-i", keyPath)
@@ -155,6 +175,18 @@ func safeSSHToken(val string) bool {
 	}
 	for _, r := range val {
 		if r <= ' ' || strings.ContainsRune("'\";&|$`\\<>\n\r", r) {
+			return false
+		}
+	}
+	return true
+}
+
+func safeSSHPath(val string) bool {
+	if val == "" || strings.HasPrefix(val, "-") {
+		return false
+	}
+	for _, r := range val {
+		if r < ' ' || strings.ContainsRune("'\";&|$`<>\n\r", r) {
 			return false
 		}
 	}

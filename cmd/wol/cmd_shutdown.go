@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -45,6 +46,12 @@ func runShutdown(arguments []string) int {
 		printShutdownUsage()
 		return 2
 	}
+	sudoSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "sudo" {
+			sudoSet = true
+		}
+	})
 	dataStore, err := store.Open(*databasePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open SQLite database: %v\n", err)
@@ -58,7 +65,7 @@ func runShutdown(arguments []string) int {
 		return 2
 	}
 
-	target, err := resolvePowerTarget(dataStore, device, *user, *port, *key, *platform, *useSudo)
+	target, err := resolvePowerTarget(dataStore, device, *user, *port, *key, *platform, *useSudo, sudoSet)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "resolve power target: %v\n", err)
 		return 2
@@ -153,6 +160,11 @@ func runShutdownConfigure(arguments []string) int {
 		return 2
 	}
 
+	visited := map[string]bool{}
+	flags.Visit(func(f *flag.Flag) {
+		visited[f.Name] = true
+	})
+
 	dataStore, err := store.Open(*databasePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open SQLite database: %v\n", err)
@@ -166,15 +178,39 @@ func runShutdownConfigure(arguments []string) int {
 		return 2
 	}
 
-	profile, err := dataStore.UpsertPowerProfile(context.Background(), store.PowerProfile{
-		DeviceID: device.ID,
-		SSHUser:  *user,
-		SSHPort:  *port,
-		SSHKey:   *key,
-		Platform: *platform,
-		UseSudo:  *useSudo,
-		Enabled:  true,
-	})
+	item := store.PowerProfile{DeviceID: device.ID, SSHPort: 22, Platform: "windows", Enabled: true}
+	existing, err := dataStore.GetPowerProfile(context.Background(), device.ID)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		item.SSHUser = *user
+		item.SSHPort = *port
+		item.SSHKey = *key
+		item.Platform = *platform
+		item.UseSudo = *useSudo
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "load power profile: %v\n", err)
+		return 1
+	default:
+		item = existing
+		item.Enabled = true
+		if visited["user"] {
+			item.SSHUser = *user
+		}
+		if visited["port"] {
+			item.SSHPort = *port
+		}
+		if visited["key"] {
+			item.SSHKey = *key
+		}
+		if visited["platform"] {
+			item.Platform = *platform
+		}
+		if visited["sudo"] {
+			item.UseSudo = *useSudo
+		}
+	}
+
+	profile, err := dataStore.UpsertPowerProfile(context.Background(), item)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "save power profile: %v\n", err)
 		return 1
@@ -239,7 +275,7 @@ func runShutdownStatus(arguments []string) int {
 	return 0
 }
 
-func resolvePowerTarget(dataStore *store.Store, device store.Device, userFlag string, portFlag int, keyFlag string, platformFlag string, sudoFlag bool) (power.Target, error) {
+func resolvePowerTarget(dataStore *store.Store, device store.Device, userFlag string, portFlag int, keyFlag string, platformFlag string, sudoFlag bool, sudoSet bool) (power.Target, error) {
 	host := strings.TrimSpace(device.IPAddress)
 	if host == "" {
 		return power.Target{}, fmt.Errorf("device %s has no IP address configured", device.Name)
@@ -253,7 +289,6 @@ func resolvePowerTarget(dataStore *store.Store, device store.Device, userFlag st
 		Platform:   device.Platform,
 	}
 
-	// Try loading stored PowerProfile
 	if profile, err := dataStore.GetPowerProfile(context.Background(), device.ID); err == nil && profile.Enabled {
 		if profile.SSHUser != "" {
 			target.User = profile.SSHUser
@@ -269,7 +304,6 @@ func resolvePowerTarget(dataStore *store.Store, device store.Device, userFlag st
 		}
 		target.UseSudo = profile.UseSudo
 	} else {
-		// Fallback: check RemoteProfile for hints
 		if rProfile, err := dataStore.GetRemoteProfile(context.Background(), device.ID); err == nil && rProfile.Enabled {
 			if rProfile.UsernameHint != "" {
 				target.User = rProfile.UsernameHint
@@ -280,7 +314,6 @@ func resolvePowerTarget(dataStore *store.Store, device store.Device, userFlag st
 		}
 	}
 
-	// CLI flags override stored profile
 	if strings.TrimSpace(userFlag) != "" {
 		target.User = strings.TrimSpace(userFlag)
 	}
@@ -293,12 +326,12 @@ func resolvePowerTarget(dataStore *store.Store, device store.Device, userFlag st
 	if strings.TrimSpace(platformFlag) != "" {
 		target.Platform = strings.TrimSpace(platformFlag)
 	}
-	if sudoFlag {
-		target.UseSudo = true
+	if sudoSet {
+		target.UseSudo = sudoFlag
 	}
 
-	if target.Platform == "" || target.Platform == "unknown" {
-		target.Platform = "windows"
+	if power.NormalizePlatform(target.Platform) == "" {
+		return power.Target{}, fmt.Errorf("device %s has no power platform configured; run: wol shutdown configure --platform windows|linux|darwin %q", device.Name, device.Name)
 	}
 
 	return target, nil
@@ -315,7 +348,7 @@ func printShutdownUsage() {
 	fmt.Fprintln(os.Stderr, "  wol shutdown status                    View recent power operation history")
 	fmt.Fprintln(os.Stderr, "")
 	fmt.Fprintln(os.Stderr, "Flags:")
-	fmt.Fprintln(os.Stderr, "  --delay <duration>  Delay before shutdown (e.g. 15m, 30m, 1h, 1800s)")
+	fmt.Fprintln(os.Stderr, "  --delay <duration>  Delay before shutdown (Windows: >=1s; Linux/macOS: whole minutes like 15m)")
 	fmt.Fprintln(os.Stderr, "  --now               Shutdown immediately")
 	fmt.Fprintln(os.Stderr, "  --force             Force applications to close without prompt")
 	fmt.Fprintln(os.Stderr, "  --cancel            Abort pending scheduled shutdown")

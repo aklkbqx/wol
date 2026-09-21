@@ -114,15 +114,21 @@ func (c *Cache) Resolve(ctx context.Context, key string, force bool, probe func(
 	c.mu.Unlock()
 
 	var result Result
+	var err error
 	defer func() {
 		c.mu.Lock()
 		call.result = result
+		call.err = err
 		delete(c.inFlight, key)
 		close(call.done)
 		c.mu.Unlock()
 	}()
 
 	result = probe(ctx)
+	if ctx.Err() != nil {
+		err = ctx.Err()
+		return Result{}, err
+	}
 	result = c.Set(key, result)
 	return result, nil
 }

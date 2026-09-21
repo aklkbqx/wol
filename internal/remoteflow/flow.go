@@ -31,6 +31,7 @@ type Manager struct {
 	startMoonlight streamStarter
 
 	mu       sync.Mutex
+	closed   bool
 	sessions map[string]*localremote.Session
 	streams  map[string]*moonlight.Session
 }
@@ -87,6 +88,11 @@ func (m *Manager) Open(ctx context.Context, device store.Device, profile store.R
 			return "", fmt.Errorf("launch moonlight: %w", err)
 		}
 		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			_ = session.Stop()
+			return "", errors.New("local remote manager is closed")
+		}
 		previous := m.streams[device.ID]
 		m.streams[device.ID] = session
 		m.mu.Unlock()
@@ -128,6 +134,11 @@ func (m *Manager) Open(ctx context.Context, device store.Device, profile store.R
 	// Once startup succeeds, the manager—not the one-shot action—owns lifetime.
 	stopActionCancel()
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		_ = session.Close()
+		return "", errors.New("local remote manager is closed")
+	}
 	previous := m.sessions[device.ID]
 	m.sessions[device.ID] = session
 	m.mu.Unlock()
@@ -204,6 +215,9 @@ func (m *Manager) Close() error {
 	if m == nil {
 		return nil
 	}
+	m.mu.Lock()
+	m.closed = true
+	m.mu.Unlock()
 	m.cancel()
 	m.mu.Lock()
 	sessions := make([]*localremote.Session, 0, len(m.sessions))
