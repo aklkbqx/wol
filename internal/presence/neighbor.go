@@ -102,7 +102,7 @@ func parseNeighborTable(goos, output string) []Neighbor {
 			continue
 		}
 		mac := parsed.String()
-		if _, dup := seenMAC[mac]; dup {
+		if _, dup := seenMAC[mac+"/"+ipv4Pattern.FindString(line)]; dup {
 			continue
 		}
 		ip := ipv4Pattern.FindString(line)
@@ -120,7 +120,7 @@ func parseNeighborTable(goos, output string) []Neighbor {
 		if goos != "windows" && (iface == "" || !isPhysicalIface(iface)) {
 			continue
 		}
-		seenMAC[mac] = struct{}{}
+		seenMAC[mac+"/"+ip] = struct{}{}
 		out = append(out, Neighbor{IP: ip, MAC: mac, Iface: iface})
 	}
 	return out

@@ -1,5 +1,6 @@
 GO ?= go
 PREFIX ?= $(shell $(GO) env GOPATH)
+BINDIR ?= $(PREFIX)/bin
 PLIST := $(CURDIR)/packaging/macos/Info.plist
 LDFLAGS := -s -w
 CGO_FOR_BUILD ?= 0
@@ -29,8 +30,9 @@ build:
 	CGO_ENABLED=$(CGO_FOR_BUILD) $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o dist/wol ./cmd/wol
 	$(CODESIGN_CMD) dist/wol
 
-install:
-	$(GO) install -trimpath ./cmd/wol
+install: build
+	mkdir -p "$(DESTDIR)$(BINDIR)"
+	install -m 755 dist/wol "$(DESTDIR)$(BINDIR)/wol"
 
 run:
 	$(GO) run ./cmd/wol
@@ -38,3 +40,10 @@ run:
 clean:
 	$(GO) clean
 	rm -rf dist
+
+.PHONY: verify package
+verify:
+	sh scripts/verify.sh
+
+package:
+	sh scripts/package.sh

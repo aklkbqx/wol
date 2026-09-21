@@ -385,8 +385,8 @@ func TestARPFallbackOnHostUnreachable(t *testing.T) {
 		VerifyPort: 3389,
 	}, 1*time.Second)
 
-	if res.Status != StatusOnline {
-		t.Fatalf("expected StatusOnline via ARP, got %q message=%q", res.Status, res.Message)
+	if res.Status != StatusUnknown {
+		t.Fatalf("cached ARP must be StatusUnknown, got %q message=%q", res.Status, res.Message)
 	}
 	if res.Method != MethodARP {
 		t.Fatalf("expected MethodARP, got %q", res.Method)

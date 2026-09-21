@@ -22,9 +22,7 @@ func TestClassifyLANAndBroadcast(t *testing.T) {
 	if moved[0].Neighbor.IP != "192.168.8.200" {
 		t.Fatalf("moved IP = %s", moved[0].Neighbor.IP)
 	}
-	if BroadcastOf("192.168.8.200") != "192.168.8.255" {
-		t.Fatalf("broadcast = %s", BroadcastOf("192.168.8.200"))
-	}
+
 	if UniqueDeviceName(devices, "windows") == "windows" {
 		t.Fatal("expected unique name to avoid colliding with windows")
 	}

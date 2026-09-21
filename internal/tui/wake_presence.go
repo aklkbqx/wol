@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aklkbqx/wol/internal/fleet"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,37 +25,34 @@ func (m *WakeModel) ensureCheckedDevice() {
 }
 
 func (m *WakeModel) startPresenceScan(devices []store.Device, requestID uint64, kind loadingKind, parent context.Context) tea.Cmd {
+	devices = append([]store.Device(nil), devices...)
+	if m.tab == 0 {
+		if d, ok := m.selectedDevice(m.filteredDevices()); ok {
+			for i, item := range devices {
+				if item.ID == d.ID {
+					devices[0], devices[i] = devices[i], devices[0]
+					break
+				}
+			}
+		}
+	}
 	if len(devices) == 0 {
 		return nil
 	}
-	targets := make([]presence.Target, 0, len(devices))
-	for _, device := range devices {
-		port := device.VerifyPort
-		if profile, ok := m.profiles[device.ID]; port == 0 && ok {
-			port = profile.VerifyPort
-		}
-		targets = append(targets, presence.Target{
-			DeviceID:   device.ID,
-			IPAddress:  device.IPAddress,
-			VerifyPort: port,
-		})
-	}
-	detector := m.presenceDetector()
 	if parent == nil {
 		parent = context.Background()
 	}
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(parent, 4*time.Second)
-		defer cancel()
-		result := detector.ProbeBatch(ctx, targets, 2500*time.Millisecond)
-		statuses := make(map[string]string, len(result.Results))
-		methods := make(map[string]string, len(result.Results))
-		for _, item := range result.Results {
-			statuses[item.DeviceID] = string(item.Status)
-			methods[item.DeviceID] = string(item.Method)
-		}
-		return probeBatchMsg{requestID: requestID, kind: kind, statuses: statuses, methods: methods, summary: result.Summary}
+	m.loadContext, m.loadCancel = context.WithCancel(parent)
+	profiles := make([]store.RemoteProfile, 0, len(m.profiles))
+	for _, p := range m.profiles {
+		profiles = append(profiles, p)
 	}
+	m.checking = true
+	m.scanDone = 0
+	m.scanTotal = len(devices)
+	m.scanResults = fleet.Run(m.loadContext, devices, m.sites, 16, fleet.Check(m.presenceDetector(), profiles))
+	m.status = fmt.Sprintf("Checking 0/%d machines. Esc cancels.", len(devices))
+	return nextFleet(m.scanResults, requestID, false)
 }
 
 func (m *WakeModel) presenceDetector() *presence.Detector {
@@ -87,8 +85,8 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 		m.loadCancel()
 	}
 	m.requestID++
-	m.phase = phaseCheckingMachine
-	m.loading = true
+	m.phase = phaseReady
+	m.loading = false
 	m.loadingStage = stagePresence
 	m.loadingTarget = device.Name
 	if port > 0 {
@@ -106,7 +104,7 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
 		result := detector.Probe(ctx, presence.Target{DeviceID: device.ID, IPAddress: device.IPAddress, VerifyPort: port}, 2500*time.Millisecond)
-		return probeResultMsg{requestID: requestID, deviceID: device.ID, status: string(result.Status), method: string(result.Method)}
+		return probeResultMsg{requestID: requestID, deviceID: device.ID, status: string(result.Status), method: string(result.Method), message: result.Message}
 	}
 	return tea.Batch(checkCmd, motionCmd)
 }

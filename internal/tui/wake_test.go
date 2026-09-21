@@ -160,7 +160,7 @@ func TestCompactWakeDeskFitsShortTerminalHeight(t *testing.T) {
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
 		t.Fatalf("compact view uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
 	}
-	if !strings.Contains(view, "wol") || !strings.Contains(view, "windows") || !strings.Contains(view, "online") || !strings.Contains(view, "asleep") {
+	if !strings.Contains(view, "wol") || !strings.Contains(view, "windows") || !strings.Contains(view, "online") || !strings.Contains(view, "unreachable") {
 		t.Fatalf("compact view lost essential context:\n%s", view)
 	}
 }
@@ -249,7 +249,7 @@ func TestWakeDeskShowsPowerAndWakeStatesSeparately(t *testing.T) {
 		status:   "ready",
 	}
 	view := model.View()
-	for _, want := range []string{"online", "unknown", "asleep", "setup", "blocked", "remote", "192.168.50.200"} {
+	for _, want := range []string{"online", "unknown", "unreachable", "setup", "blocked", "remote", "192.168.50.200"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -307,8 +307,8 @@ func TestWakeDeskRefreshStartsPresenceScan(t *testing.T) {
 	if model.presence["one"] != "" {
 		t.Fatalf("scan changed the visible snapshot before completion: %#v", model.presence)
 	}
-	message, ok := cmd().(probeBatchMsg)
-	if !ok || message.requestID != 7 || message.kind != loadingRefresh || message.summary.Online != 1 || message.statuses["one"] != "online" {
+	message, ok := cmd().(fleetMsg)
+	if !ok || message.id != 7 || message.result.Status != "online" {
 		t.Fatalf("scan message = %#v, want one online result", message)
 	}
 }
@@ -455,7 +455,7 @@ func TestColoredWideRowsKeepStatusColumnsAligned(t *testing.T) {
 		}
 		index := strings.Index(line, "online")
 		if index < 0 {
-			index = strings.Index(line, "asleep")
+			index = strings.Index(line, "unreachable")
 		}
 		if index > 0 {
 			columns = append(columns, lipgloss.Width(line[:index]))
@@ -512,7 +512,7 @@ func TestMachineFormFitsShortTerminal(t *testing.T) {
 	}
 	model.form.selected = len(model.form.labels) - 1
 	view = model.View()
-	if !strings.Contains(view, "Relay ID") || !strings.Contains(view, "earlier field") {
+	if !strings.Contains(view, "Site name") || !strings.Contains(view, "earlier field") {
 		t.Fatalf("short form did not scroll to selected final field:\n%s", view)
 	}
 }
@@ -582,7 +582,7 @@ func TestActionPickerFitsResponsiveViewports(t *testing.T) {
 	}
 }
 
-func TestStartupHidesFleetUntilAtomicSnapshotIsVerified(t *testing.T) {
+func TestStartupShowsInventoryWhileProbesStream(t *testing.T) {
 	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -604,17 +604,20 @@ func TestStartupHidesFleetUntilAtomicSnapshotIsVerified(t *testing.T) {
 		t.Fatalf("initial command returned %T", model.Init()())
 	}
 	_, scan := model.Update(data)
-	if model.phase != phaseBootLoading || len(model.devices) != 0 || model.pending == nil {
+	if model.phase != phaseReady || len(model.devices) != 1 || model.pending != nil {
 		t.Fatalf("inventory leaked before verification: phase=%v devices=%d pending=%v", model.phase, len(model.devices), model.pending != nil)
 	}
-	if view := model.View(); strings.Contains(view, "windows") || !strings.Contains(view, "checking") {
+	if view := model.View(); !strings.Contains(view, "windows") || !strings.Contains(view, "Checking") {
 		t.Fatalf("startup exposed the dashboard before verification:\n%s", view)
 	}
-	result, ok := scan().(probeBatchMsg)
+	result, ok := scan().(fleetMsg)
 	if !ok {
 		t.Fatalf("scan returned %T", scan())
 	}
-	model.Update(result)
+	_, next := model.Update(result)
+	if next != nil {
+		model.Update(next())
+	}
 	if model.phase != phaseReady || len(model.devices) != 1 || model.presence[model.devices[0].ID] != "online" || model.checkedAt.IsZero() {
 		t.Fatalf("verified snapshot was not committed: phase=%v devices=%d presence=%v checked=%v", model.phase, len(model.devices), model.presence, model.checkedAt)
 	}
@@ -649,7 +652,7 @@ func TestStaleAsyncResponseCannotOverwriteCurrentRequest(t *testing.T) {
 	}
 }
 
-func TestSinglePowerCheckUsesFocusedLoadingWithoutMutatingVisibleStatus(t *testing.T) {
+func TestSinglePowerCheckKeepsInventoryInteractive(t *testing.T) {
 	device := store.Device{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true}
 	model := &WakeModel{
 		width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false), phase: phaseReady,
@@ -660,10 +663,10 @@ func TestSinglePowerCheckUsesFocusedLoadingWithoutMutatingVisibleStatus(t *testi
 		),
 	}
 	cmd := model.probeSelected()
-	if model.phase != phaseCheckingMachine || model.presence["one"] != "offline" {
+	if model.phase != phaseReady || model.presence["one"] != "offline" {
 		t.Fatalf("focused check changed visible state early: phase=%v presence=%v", model.phase, model.presence)
 	}
-	if view := model.View(); !strings.Contains(view, "checking power") || !strings.Contains(view, "windows") || strings.Contains(view, "enter choose") {
+	if view := model.View(); !strings.Contains(view, "Checking power") || !strings.Contains(view, "windows") || !strings.Contains(view, "enter choose") {
 		t.Fatalf("focused check view is unclear:\n%s", view)
 	}
 	message, ok := cmd().(probeResultMsg)
@@ -1060,15 +1063,15 @@ func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
 	if model.presence["win-dev-1"] != "offline" {
 		t.Fatalf("expected presence to be offline, got %q", model.presence["win-dev-1"])
 	}
-	if !strings.Contains(model.status, "ASLEEP after shutdown") {
-		t.Fatalf("expected status to mention ASLEEP after shutdown, got %q", model.status)
+	if !strings.Contains(model.status, "unreachable after shutdown") {
+		t.Fatalf("expected status to mention unreachable after shutdown, got %q", model.status)
 	}
 
 	offlineView := model.View()
-	if !strings.Contains(offlineView, "asleep") {
-		t.Fatalf("expected offline view to display 'asleep', got:\n%s", offlineView)
+	if !strings.Contains(offlineView, "unreachable") {
+		t.Fatalf("expected offline view to display 'unreachable', got:\n%s", offlineView)
 	}
-	if !strings.Contains(offlineView, "1 asleep") {
-		t.Fatalf("expected fleet summary to count 1 asleep, got:\n%s", offlineView)
+	if !strings.Contains(offlineView, "1 unreachable") {
+		t.Fatalf("expected fleet summary to count 1 unreachable, got:\n%s", offlineView)
 	}
 }

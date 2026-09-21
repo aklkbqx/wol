@@ -70,11 +70,11 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 	rowWidth := max(1, width)
 	online, offline, unknown, _, _, _, _ := m.machineSummary(devices)
 	rows := []string{
-		m.theme.muted().Render(fitText(fmt.Sprintf("%d machines  %d online  %d asleep  %d unknown", len(devices), online, offline, unknown), rowWidth)),
+		m.theme.muted().Render(fitText(fmt.Sprintf("%d machines  %d online  %d unreachable  %d unknown", len(devices), online, offline, unknown), rowWidth)),
 		"",
 	}
 	if len(devices) == 0 {
-		rows = append(rows, "no machines. press a to add one.")
+		rows = append(rows, fitText("No machines. n discover · a add · i import", rowWidth))
 		return strings.Join(rows, "\n")
 	}
 	visible, start := m.machineViewport(devices, width)
@@ -102,13 +102,16 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 		if highlighted {
 			marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
 		}
+		if m.marked[device.ID] {
+			marker = "*"
+		}
 		power := powerWord(m.deviceState(device))
 		action := m.actionWord(device)
 		name := padVisible(fitText(device.Name, nameWidth), nameWidth)
 		if highlighted {
 			name = m.theme.accent().Render(name)
 		}
-		powerStyled := stateStyle(m.theme, m.deviceState(device)).Render(padVisible(power, 8))
+		powerStyled := stateStyle(m.theme, m.deviceState(device)).Render(padVisible(power, 11))
 		actionStyled := stateStyle(m.theme, actionState(action)).Render(action)
 		if (m.waking || m.opening || m.shuttingDown) && device.ID == m.actionTargetID {
 			spinner := "●"
@@ -128,7 +131,7 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 				label = "remote"
 			}
 			power = spinner + " " + label
-			powerStyled = m.theme.accent().Render(padVisible(power, 8))
+			powerStyled = m.theme.accent().Render(padVisible(power, 11))
 		}
 		if width < 36 {
 			rows = append(rows, fitText(marker+" "+fitText(device.Name, max(1, rowWidth-2)), rowWidth))

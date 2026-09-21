@@ -240,11 +240,6 @@ func (d *Detector) Probe(ctx context.Context, target Target, timeout time.Durati
 		immediateUnreachable = false
 	}
 
-	// 3. Neighbor/ARP — only when TCP never left the host (TCC or no route).
-	if immediateUnreachable && probeCtx.Err() == nil && d.neighbor(probeCtx, host) {
-		return onlineResult(MethodARP)
-	}
-
 	// 4. ICMP Ping fallback
 	if probeCtx.Err() == nil {
 		pingTimeout := 1000 * time.Millisecond
@@ -275,7 +270,15 @@ func (d *Detector) Probe(ctx context.Context, target Target, timeout time.Durati
 		}
 	}
 
-	if immediateUnreachable {
+	// 3. Neighbor/ARP — only when TCP never left the host (TCC or no route).
+	if immediateUnreachable && probeCtx.Err() == nil && d.neighbor(probeCtx, host) {
+		return Result{DeviceID: target.DeviceID, IPAddress: target.IPAddress,
+			Status: StatusUnknown, Method: MethodARP, CheckedAt: checkedAt, Cached: true,
+			LatencyMS: time.Since(start).Milliseconds(),
+			Message:   "cached ARP entry found; live reachability is unconfirmed; check local network permissions or routing"}
+	}
+
+	if immediateUnreachable || ctx.Err() != nil {
 		return Result{
 			DeviceID:  target.DeviceID,
 			IPAddress: target.IPAddress,

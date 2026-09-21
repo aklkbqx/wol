@@ -17,6 +17,8 @@ import (
 func runStatus(arguments []string) int {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	databasePath := flags.String("db", envString("WOL_DB", store.DefaultDatabasePath()), "inventory database path")
+	jsonOut := flags.Bool("json", false, "print structured result")
+	flags.Bool("no-input", false, "never prompt")
 	timeout := flags.Duration("timeout", 3*time.Second, "maximum probe time")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
@@ -36,7 +38,7 @@ func runStatus(arguments []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	if strings.TrimSpace(device.IPAddress) == "" {
+	if strings.TrimSpace(device.IPAddress) == "" && !*jsonOut {
 		fmt.Printf("%s  UNKNOWN  no IP address configured\n", device.Name)
 		return 1
 	}
@@ -49,9 +51,15 @@ func runStatus(arguments []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	result := presence.NewDetector().Probe(ctx, presence.Target{DeviceID: device.ID, IPAddress: device.IPAddress, VerifyPort: port}, *timeout)
-	fmt.Printf("%s  %s  via %s  %dms\n", device.Name, strings.ToUpper(string(result.Status)), result.Method, result.LatencyMS)
-	if result.Message != "" {
-		fmt.Println(result.Message)
+	if *jsonOut {
+		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
+			return 1
+		}
+	} else {
+		fmt.Printf("%s  %s  via %s  %dms\n", device.Name, strings.ToUpper(string(result.Status)), result.Method, result.LatencyMS)
+		if result.Message != "" {
+			fmt.Println(result.Message)
+		}
 	}
 	if result.Status == presence.StatusOnline {
 		return 0

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aklkbqx/wol/internal/netutil"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
 	"github.com/aklkbqx/wol/internal/wol"
@@ -38,7 +39,7 @@ func ClassifyLAN(devices []store.Device, neighbors []presence.Neighbor) (known, 
 			unknown = append(unknown, neighbor)
 			continue
 		}
-		host := LANHost{Neighbor: neighbor, Device: &device, Moved: device.IPAddress != "" && device.IPAddress != neighbor.IP}
+		host := LANHost{Neighbor: neighbor, Device: &device, Moved: device.IPAddress != neighbor.IP}
 		if host.Moved {
 			moved = append(moved, host)
 		} else {
@@ -54,24 +55,39 @@ func SyncDeviceIPs(ctx context.Context, repository *store.Store, devices []store
 	}
 	_, moved, _ := ClassifyLAN(devices, neighbors)
 	updated := 0
+	counts := make(map[string]int)
+	for _, n := range neighbors {
+		counts[n.MAC]++
+	}
 	for _, host := range moved {
 		if host.Device == nil {
 			continue
 		}
 		item := *host.Device
-		oldIP := item.IPAddress
-		item.IPAddress = host.Neighbor.IP
-		if strings.TrimSpace(item.BroadcastAddress) == "" {
-			item.BroadcastAddress = BroadcastOf(host.Neighbor.IP)
+		if counts[host.Neighbor.MAC] != 1 || item.WakeRelayID != "" {
+			continue
 		}
-		if _, err := repository.UpdateDevice(ctx, item.ID, item); err != nil {
-			return updated, err
-		}
-		if profile, err := repository.GetRemoteProfile(ctx, item.ID); err == nil && profile.Host == oldIP {
-			profile.Host = host.Neighbor.IP
-			if _, err := repository.UpsertRemoteProfile(ctx, profile); err != nil {
+		if item.SiteID != "" {
+			site, err := repository.GetSite(ctx, item.SiteID)
+			if err != nil {
 				return updated, err
 			}
+			if site.WakeRelayID != "" {
+				continue
+			}
+			if site.Subnet != "" {
+				_, subnet, err := net.ParseCIDR(site.Subnet)
+				if err != nil || !subnet.Contains(net.ParseIP(host.Neighbor.IP)) {
+					continue
+				}
+			}
+		}
+		changed, err := repository.SyncDeviceAddress(ctx, item.ID, item.IPAddress, host.Neighbor.IP)
+		if err != nil {
+			return updated, err
+		}
+		if !changed {
+			continue
 		}
 		updated++
 	}
@@ -79,12 +95,7 @@ func SyncDeviceIPs(ctx context.Context, repository *store.Store, devices []store
 }
 
 func BroadcastOf(ip string) string {
-	parsed := net.ParseIP(strings.TrimSpace(ip)).To4()
-	if parsed == nil {
-		return ""
-	}
-	parsed[3] = 255
-	return parsed.String()
+	return netutil.LocalBroadcast(ip, "")
 }
 
 func SuggestName(ip, mac string) string {

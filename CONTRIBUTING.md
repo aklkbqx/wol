@@ -7,12 +7,13 @@ portable packaging.
 Before opening a pull request:
 
 ```bash
-make test
-make check
+make verify
 ```
 
 - Add focused tests for behavior changes.
 - Preserve narrow-terminal, `NO_COLOR`, ASCII, and reduced-motion behavior.
-- Do not add web servers, browser clients, deployment automation, credentials,
+- Keep optional browser-remote changes inside its localhost companion. Do not add hosted services, deployment automation, credentials,
   real machine inventories, or private network details.
 - Keep external commands non-interactive and validate every dynamic argument.
+
+Read [Development](docs/development.md) for architecture, migrations and local release checks, and [Community conduct](CODE_OF_CONDUCT.md). Describe unverified platforms in your PR. No GitHub Actions workflows are used.
