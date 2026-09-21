@@ -24,3 +24,18 @@ func TestRunDoctorReportsInvalidNetworkConfig(t *testing.T) {
 	}
 	t.Fatal("doctor report did not include network configuration")
 }
+
+func TestRunDoctorOmitsUnusedRelayAndZeroTierNoise(t *testing.T) {
+	report := RunDoctor(t.TempDir())
+	for _, item := range report.Items {
+		if item.Name == "Local etherwake" {
+			t.Fatalf("etherwake should not appear unless an SSH relay is configured: %+v", item)
+		}
+		if item.Category == "ZeroTier" {
+			t.Fatalf("ZeroTier should not appear without a configured zerotier target: %+v", item)
+		}
+		if item.Name == "Magic packet" && item.Status != "OK" {
+			t.Fatalf("magic packet status = %q", item.Status)
+		}
+	}
+}

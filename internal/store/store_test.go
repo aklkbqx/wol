@@ -328,7 +328,7 @@ func TestRemoteProfileCRUDValidationAndDeviceCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.Protocol != "rdp" || created.Host != device.IPAddress || created.Port != 3389 || created.VerifyPort != 3389 || created.Mode != "browser-local" || created.DomainHint != "WORK" || created.CertificatePolicy != "trust-local" {
+	if created.Protocol != "rdp" || created.Host != device.IPAddress || created.Port != 3389 || created.VerifyPort != 3389 || created.Mode != "native" || created.DomainHint != "WORK" || created.CertificatePolicy != "trust-local" {
 		t.Fatalf("profile defaults were not normalized: %+v", created)
 	}
 	updated, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "vnc", Host: "10.0.0.8", Port: 5901, Mode: "browser-local", Enabled: true})
@@ -348,8 +348,8 @@ func TestRemoteProfileCRUDValidationAndDeviceCleanup(t *testing.T) {
 	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: "remote.example.test", Enabled: true}); err == nil {
 		t.Fatal("public remote hostname must be rejected")
 	}
-	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, Mode: "native", Enabled: true}); err == nil {
-		t.Fatal("unsupported native mode must be rejected")
+	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, Mode: "hosted", Enabled: true}); err == nil {
+		t.Fatal("unsupported hosted mode must be rejected")
 	}
 	if _, err := repository.UpsertRemoteProfile(t.Context(), RemoteProfile{DeviceID: device.ID, Protocol: "https", Host: "desktop.local", Enabled: true}); err == nil {
 		t.Fatal("web URL protocol must be rejected")

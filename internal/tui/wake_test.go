@@ -561,7 +561,7 @@ func TestRemoteProfileFormSavesProtocolWithoutPassword(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Protocol != "sunshine" || profile.Host != device.IPAddress || profile.Mode != "native-moonlight" || profile.Port != 47989 {
+	if profile.Protocol != "rdp" || profile.Host != device.IPAddress || profile.Mode != "native" || profile.Port != 3389 {
 		t.Fatalf("saved profile = %+v", profile)
 	}
 }

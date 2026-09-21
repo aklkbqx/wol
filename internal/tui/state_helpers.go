@@ -127,7 +127,15 @@ func (m *WakeModel) remoteCapability(device store.Device) (state, detail string)
 	if streamProfile(profile) {
 		return "READY", "sunshine · moonlight"
 	}
-	return "READY", strings.ToUpper(profile.Protocol) + " · browser"
+	return "READY", strings.ToUpper(profile.Protocol) + " · native"
+}
+
+func (m *WakeModel) presenceDetail(device store.Device) string {
+	state := powerWord(m.deviceState(device))
+	if method := strings.TrimSpace(m.presenceMethod[device.ID]); method != "" && method != "none" {
+		return state + " via " + method
+	}
+	return state
 }
 
 func powerWord(state string) string {

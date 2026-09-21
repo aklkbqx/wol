@@ -49,8 +49,10 @@ local inventory automatically. Press `a` to add a machine or route.
 ```bash
 wol                         # interactive Wake Desk
 wol wake --device windows   # wake a stored machine
-wol remote windows          # wake if needed, then open a localhost remote
+wol remote windows          # wake if needed, then open the native client (RDP/SSH/VNC) or Moonlight
+wol remote --browser windows  # use the localhost Guacamole session instead
 wol remote --no-wake windows  # require it online; never send a wake packet
+wol scan --add              # import new LAN neighbors into inventory
 wol remote configure --protocol rdp --host 192.168.50.200 --certificate strict windows
 wol remote clear windows    # remove the machine's remote profile
 wol remote doctor windows   # check the runtime and this target
@@ -90,15 +92,20 @@ The full profile command is:
 wol remote configure [--db path] [--protocol rdp|vnc|ssh] [--host HOST] [--port N] [--verify-port N] [--username USER] [--domain DOMAIN] [--certificate strict|trust-local] <machine>
 ```
 
-`wol remote NAME` checks the machine, wakes it when necessary, starts an
-ephemeral browser session on `127.0.0.1` using pinned Apache Guacamole
+`wol remote NAME` checks the machine, wakes it when necessary, and opens the
+native RDP, SSH, or VNC client registered on this computer. Sunshine profiles
+launch Moonlight. Install a client that handles the selected protocol first;
+native clients manage their own credentials and certificate settings.
+
+`wol remote --browser NAME` opens RDP, SSH, or VNC through an ephemeral browser
+session on `127.0.0.1` using pinned Apache Guacamole
 containers, and opens a one-time localhost sign-in. Credentials are accepted
 by that loopback session only, encrypted into a short-lived launch token, and
 never written to SQLite, exports, command arguments, or logs. The listener is
 not exposed to the LAN or internet and stops with the CLI session. Docker is required only
 for this browser-based remote flow. Run `wol remote doctor` for a read-only
 check; `wol remote doctor NAME` also checks the selected profile and service.
-`wol remote setup` downloads the required pinned images. The default RDP
+`wol remote setup` downloads the required pinned images. For browser sessions, the default RDP
 certificate policy is `strict`; use `trust-local` only for a private machine
 whose self-signed RDP certificate you explicitly trust.
 
@@ -113,8 +120,9 @@ wake configuration. WOL never sends this remote flow to a hosted endpoint.
 - `j/k` or arrows: move
 - `Enter`: open the action picker; it never starts an action immediately
 - `w`: wake only
-- `c`: wake if needed, then open a localhost remote session
+- `c`: wake if needed, then open the native remote client or Moonlight
 - `s`: check selected machine
+- `n`: discover LAN neighbors and add new hosts
 - `f`: force wake a disabled machine
 - `a/e/d`: add, edit, delete
 - `1/2/3`: machines, routes, activity

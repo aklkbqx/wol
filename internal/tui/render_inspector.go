@@ -62,6 +62,7 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	lines = append(lines,
 		m.theme.muted().Render(divider),
 		m.theme.muted().Render("IP   : ")+fitText(device.IPAddress, max(1, rowWidth-7)),
+		m.theme.muted().Render("Seen : ")+fitText(m.presenceDetail(device), max(1, rowWidth-7)),
 		m.theme.muted().Render("MAC  : ")+fitText(device.MACAddress, max(1, rowWidth-7)),
 		m.theme.muted().Render("Route: ")+fitText(m.routeText(device), max(1, rowWidth-7)),
 	)

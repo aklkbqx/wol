@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.aklkbqx.wol</string>
+	<key>CFBundleName</key>
+	<string>wol</string>
+	<key>CFBundleDisplayName</key>
+	<string>wol</string>
+	<key>CFBundleExecutable</key>
+	<string>wol</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>wol checks whether machines on your local network are powered on by probing TCP, ICMP, and ARP.</string>
+</dict>
+</plist>

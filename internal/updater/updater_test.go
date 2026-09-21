@@ -213,6 +213,23 @@ func TestCheckLatest(t *testing.T) {
 	}
 }
 
+func TestFetchReleaseByTagMissingReleaseIsError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := NewClient("0.4.12-dev",
+		WithBaseAPIURL(server.URL),
+		WithBaseWebURL(server.URL),
+		WithHTTPClient(server.Client()),
+	)
+	_, err := client.FetchReleaseByTag(context.Background(), "v9.9.9")
+	if err == nil {
+		t.Fatal("expected missing GitHub release tag to fail")
+	}
+}
+
 func TestFetchReleaseByTagSurfacesHTTPErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

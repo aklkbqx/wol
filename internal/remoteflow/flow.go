@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/aklkbqx/wol/internal/localremote"
 	"github.com/aklkbqx/wol/internal/moonlight"
+	"github.com/aklkbqx/wol/internal/remoteopen"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
 )
@@ -18,6 +20,7 @@ import (
 type sessionStarter func(context.Context, localremote.Config) (*localremote.Session, error)
 type targetProbe func(context.Context, string, int) bool
 type streamStarter func(context.Context, string, string, int, string, int) (*moonlight.Session, error)
+type desktopStarter func(context.Context, store.RemoteProfile) error
 
 // Manager owns the short-lived Docker sidecars, brokers, and streaming flows it starts.
 type Manager struct {
@@ -29,6 +32,7 @@ type Manager struct {
 	start          sessionStarter
 	probe          targetProbe
 	startMoonlight streamStarter
+	startDesktop   desktopStarter
 
 	mu       sync.Mutex
 	closed   bool
@@ -56,13 +60,14 @@ func New(repository *store.Store, opener localremote.Opener) *Manager {
 		start:          localremote.Start,
 		probe:          probeTarget,
 		startMoonlight: defaultMoonlightStart,
+		startDesktop:   remoteopen.OpenDesktop,
 		sessions:       make(map[string]*localremote.Session),
 		streams:        make(map[string]*moonlight.Session),
 	}
 }
 
-// Open checks the target, optionally wakes it, then starts and opens a
-// loopback-only browser session or launches native Moonlight streaming.
+// Open checks the target, optionally wakes it, then opens a native desktop
+// client, Moonlight stream, or loopback-only browser session.
 func (m *Manager) Open(ctx context.Context, device store.Device, profile store.RemoteProfile, autoWake bool) (string, error) {
 	if m == nil || m.repository == nil || m.service == nil {
 		return "", errors.New("local remote manager is unavailable")
@@ -71,18 +76,21 @@ func (m *Manager) Open(ctx context.Context, device store.Device, profile store.R
 		return "", errors.New("local remote profile is not enabled for this machine")
 	}
 
-	if profile.Mode == "native-moonlight" || profile.Protocol == "sunshine" {
-		if !m.probe(ctx, profile.Host, profile.VerifyPort) {
-			if !autoWake {
-				return "", fmt.Errorf("%s is not reachable; run without --no-wake to wake it first", device.Name)
-			}
-			if _, err := m.service.WakeDevice(ctx, device.ID, wakeservice.Options{Repeat: 3, Interval: 200 * time.Millisecond, Verify: false}); err != nil {
-				return "", fmt.Errorf("wake %s: %w", device.Name, err)
-			}
-			if err := m.waitUntilReachable(ctx, profile.Host, profile.VerifyPort, 60*time.Second); err != nil {
-				return "", fmt.Errorf("wait for %s: %w", device.Name, err)
-			}
+	if err := m.ensureReachable(ctx, device, profile, autoWake); err != nil {
+		return "", err
+	}
+
+	if remoteopen.NativeDesktop(profile) {
+		if m.startDesktop == nil {
+			m.startDesktop = remoteopen.OpenDesktop
 		}
+		if err := m.startDesktop(ctx, profile); err != nil {
+			return "", fmt.Errorf("open %s client: %w", profile.Protocol, err)
+		}
+		return fmt.Sprintf("Opened %s for %s (%s)", strings.ToUpper(profile.Protocol), device.Name, profile.Host), nil
+	}
+
+	if profile.Mode == "native-moonlight" || profile.Protocol == "sunshine" {
 		session, err := m.startMoonlight(ctx, profile.Host, profile.AppName, profile.FPS, profile.Resolution, profile.BitrateKbps)
 		if err != nil {
 			return "", fmt.Errorf("launch moonlight: %w", err)
@@ -103,18 +111,7 @@ func (m *Manager) Open(ctx context.Context, device store.Device, profile store.R
 	}
 
 	if profile.Mode != "browser-local" {
-		return "", fmt.Errorf("remote mode %q is not supported; use browser-local or native-moonlight", profile.Mode)
-	}
-	if !m.probe(ctx, profile.Host, profile.VerifyPort) {
-		if !autoWake {
-			return "", fmt.Errorf("%s is not reachable; run without --no-wake to wake it first", device.Name)
-		}
-		if _, err := m.service.WakeDevice(ctx, device.ID, wakeservice.Options{Repeat: 3, Interval: 200 * time.Millisecond, Verify: false}); err != nil {
-			return "", fmt.Errorf("wake %s: %w", device.Name, err)
-		}
-		if err := m.waitUntilReachable(ctx, profile.Host, profile.VerifyPort, 60*time.Second); err != nil {
-			return "", fmt.Errorf("wait for %s: %w", device.Name, err)
-		}
+		return "", fmt.Errorf("remote mode %q is not supported; use native, browser-local, or native-moonlight", profile.Mode)
 	}
 
 	sessionCtx, sessionCancel := context.WithCancel(m.ctx)
@@ -146,6 +143,22 @@ func (m *Manager) Open(ctx context.Context, device store.Device, profile store.R
 		_ = previous.Close()
 	}
 	return session.URL, nil
+}
+
+func (m *Manager) ensureReachable(ctx context.Context, device store.Device, profile store.RemoteProfile, autoWake bool) error {
+	if m.probe(ctx, profile.Host, profile.VerifyPort) {
+		return nil
+	}
+	if !autoWake {
+		return fmt.Errorf("%s is not reachable; run without --no-wake to wake it first", device.Name)
+	}
+	if _, err := m.service.WakeDevice(ctx, device.ID, wakeservice.Options{Repeat: 3, Interval: 200 * time.Millisecond, Verify: false}); err != nil {
+		return fmt.Errorf("wake %s: %w", device.Name, err)
+	}
+	if err := m.waitUntilReachable(ctx, profile.Host, profile.VerifyPort, 60*time.Second); err != nil {
+		return fmt.Errorf("wait for %s: %w", device.Name, err)
+	}
+	return nil
 }
 
 func (m *Manager) waitUntilReachable(ctx context.Context, host string, port int, timeout time.Duration) error {

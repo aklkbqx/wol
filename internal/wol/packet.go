@@ -30,7 +30,7 @@ type SendResult struct {
 }
 
 func ParseMAC(value string) (net.HardwareAddr, error) {
-	clean := strings.NewReplacer(":", "", "-", "", ".", "", " ", "").Replace(strings.TrimSpace(value))
+	clean := macDigits(value)
 	if len(clean) != 12 {
 		return nil, ErrInvalidMAC
 	}
@@ -43,6 +43,29 @@ func ParseMAC(value string) (net.HardwareAddr, error) {
 		return nil, ErrInvalidMAC
 	}
 	return mac, nil
+}
+
+func macDigits(value string) string {
+	trimmed := strings.TrimSpace(value)
+	for _, sep := range []string{":", "-"} {
+		if !strings.Contains(trimmed, sep) {
+			continue
+		}
+		parts := strings.Split(trimmed, sep)
+		if len(parts) != 6 {
+			break
+		}
+		var b strings.Builder
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if len(part) == 1 {
+				b.WriteByte('0')
+			}
+			b.WriteString(part)
+		}
+		return b.String()
+	}
+	return strings.NewReplacer(":", "", "-", "", ".", "", " ", "").Replace(trimmed)
 }
 
 func BuildMagicPacket(mac net.HardwareAddr) ([]byte, error) {

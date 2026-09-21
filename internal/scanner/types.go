@@ -10,6 +10,7 @@ const (
 	TargetIosSim   TargetType = "ios-sim"
 	TargetAndroid  TargetType = "android-adb"
 	TargetSSHHost  TargetType = "ssh-host"
+	TargetLAN      TargetType = "lan"
 )
 
 // DiscoveredTarget represents a discovered machine, simulator or device
@@ -23,4 +24,5 @@ type DiscoveredTarget struct {
 	SSHReachable bool       `json:"sshReachable"`
 	Details      string     `json:"details"`
 	UDID         string     `json:"udid,omitempty"`
+	MAC          string     `json:"mac,omitempty"`
 }

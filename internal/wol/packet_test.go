@@ -17,6 +17,16 @@ func TestParseMACNormalizesSeparators(t *testing.T) {
 	}
 }
 
+func TestParseMACPadsShortARPOctets(t *testing.T) {
+	mac, err := ParseMAC("30:56:f:7f:c4:5d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mac.String() != "30:56:0f:7f:c4:5d" {
+		t.Fatalf("short ARP octet: %s", mac)
+	}
+}
+
 func TestBuildMagicPacket(t *testing.T) {
 	mac, err := ParseMAC("AA:BB:CC:DD:EE:FF")
 	if err != nil {

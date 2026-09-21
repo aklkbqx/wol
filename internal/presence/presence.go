@@ -29,6 +29,7 @@ const (
 	MethodTCPRefused Method = "tcp_refused"
 	MethodTCPSweep   Method = "tcp_sweep"
 	MethodICMP       Method = "icmp"
+	MethodARP        Method = "arp"
 	MethodNone       Method = "none"
 )
 
@@ -66,6 +67,7 @@ type BatchResult struct {
 
 type DialTCPFunc func(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error)
 type PingFunc func(ctx context.Context, host string, timeout time.Duration) (time.Duration, error)
+type NeighborFunc func(ctx context.Context, host string) bool
 
 type Options struct {
 	TCPPorts      []int
@@ -73,6 +75,7 @@ type Options struct {
 	AllowLoopback bool
 	DialTCP       DialTCPFunc
 	Ping          PingFunc
+	Neighbor      NeighborFunc
 }
 
 type Option func(*Options)
@@ -107,12 +110,19 @@ func WithPing(fn PingFunc) Option {
 	}
 }
 
+func WithNeighbor(fn NeighborFunc) Option {
+	return func(o *Options) {
+		o.Neighbor = fn
+	}
+}
+
 type Detector struct {
 	tcpPorts      []int
 	concurrency   int
 	allowLoopback bool
 	dialTCP       DialTCPFunc
 	pingFn        PingFunc
+	neighborFn    NeighborFunc
 }
 
 func NewDetector(opts ...Option) *Detector {
@@ -133,6 +143,7 @@ func NewDetector(opts ...Option) *Detector {
 		allowLoopback: options.AllowLoopback,
 		dialTCP:       options.DialTCP,
 		pingFn:        options.Ping,
+		neighborFn:    options.Neighbor,
 	}
 }
 
@@ -161,6 +172,26 @@ func (d *Detector) Probe(ctx context.Context, target Target, timeout time.Durati
 	defer cancel()
 
 	host := ip.String()
+	onlineResult := func(method Method) Result {
+		return Result{
+			DeviceID:  target.DeviceID,
+			IPAddress: target.IPAddress,
+			Status:    StatusOnline,
+			Method:    method,
+			LatencyMS: time.Since(start).Milliseconds(),
+			CheckedAt: checkedAt,
+		}
+	}
+
+	tcpAttempted := false
+	immediateUnreachable := true
+
+	noteTCP := func(res tcpProbeResult) {
+		tcpAttempted = true
+		if !res.Unreachable {
+			immediateUnreachable = false
+		}
+	}
 
 	// 1. Configured VerifyPort check
 	if target.VerifyPort > 0 && target.VerifyPort <= 65535 {
@@ -173,19 +204,13 @@ func (d *Detector) Probe(ctx context.Context, target Target, timeout time.Durati
 		}
 
 		res := d.probeTCP(probeCtx, host, target.VerifyPort, tcpTimeout)
+		noteTCP(res)
 		if res.Online {
 			method := MethodTCPVerify
 			if res.Refused {
 				method = MethodTCPRefused
 			}
-			return Result{
-				DeviceID:  target.DeviceID,
-				IPAddress: target.IPAddress,
-				Status:    StatusOnline,
-				Method:    method,
-				LatencyMS: time.Since(start).Milliseconds(),
-				CheckedAt: checkedAt,
-			}
+			return onlineResult(method)
 		}
 	}
 
@@ -199,19 +224,28 @@ func (d *Detector) Probe(ctx context.Context, target Target, timeout time.Durati
 			sweepTimeout = 100 * time.Millisecond
 		}
 
-		if d.sweepTCP(probeCtx, host, d.tcpPorts, sweepTimeout) {
-			return Result{
-				DeviceID:  target.DeviceID,
-				IPAddress: target.IPAddress,
-				Status:    StatusOnline,
-				Method:    MethodTCPSweep,
-				LatencyMS: time.Since(start).Milliseconds(),
-				CheckedAt: checkedAt,
+		hit, allUnreachable, attempted := d.sweepTCP(probeCtx, host, d.tcpPorts, sweepTimeout)
+		if attempted {
+			tcpAttempted = true
+			if !allUnreachable {
+				immediateUnreachable = false
 			}
+		}
+		if hit {
+			return onlineResult(MethodTCPSweep)
 		}
 	}
 
-	// 3. ICMP Ping fallback
+	if !tcpAttempted {
+		immediateUnreachable = false
+	}
+
+	// 3. Neighbor/ARP — only when TCP never left the host (TCC or no route).
+	if immediateUnreachable && probeCtx.Err() == nil && d.neighbor(probeCtx, host) {
+		return onlineResult(MethodARP)
+	}
+
+	// 4. ICMP Ping fallback
 	if probeCtx.Err() == nil {
 		pingTimeout := 1000 * time.Millisecond
 		if deadline, ok := probeCtx.Deadline(); ok {
@@ -238,6 +272,18 @@ func (d *Detector) Probe(ctx context.Context, target Target, timeout time.Durati
 				LatencyMS: latencyMS,
 				CheckedAt: checkedAt,
 			}
+		}
+	}
+
+	if immediateUnreachable {
+		return Result{
+			DeviceID:  target.DeviceID,
+			IPAddress: target.IPAddress,
+			Status:    StatusUnknown,
+			Method:    MethodNone,
+			LatencyMS: time.Since(start).Milliseconds(),
+			CheckedAt: checkedAt,
+			Message:   "local network access denied or no route to host",
 		}
 	}
 
@@ -323,8 +369,9 @@ func (d *Detector) Summarize(results []Result) Summary {
 }
 
 type tcpProbeResult struct {
-	Online  bool
-	Refused bool
+	Online      bool
+	Refused     bool
+	Unreachable bool
 }
 
 func (d *Detector) dial(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error) {
@@ -345,17 +392,20 @@ func (d *Detector) probeTCP(ctx context.Context, host string, port int, timeout 
 	if isConnectionRefused(err) {
 		return tcpProbeResult{Online: true, Refused: true}
 	}
+	if isHostUnreachable(err) {
+		return tcpProbeResult{Unreachable: true}
+	}
 	return tcpProbeResult{Online: false, Refused: false}
 }
 
-func (d *Detector) sweepTCP(ctx context.Context, host string, ports []int, timeout time.Duration) bool {
+func (d *Detector) sweepTCP(ctx context.Context, host string, ports []int, timeout time.Duration) (hit bool, allUnreachable bool, attempted bool) {
 	if len(ports) == 0 {
-		return false
+		return false, false, false
 	}
 	sweepCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	resultChan := make(chan bool, 1)
+	resultChan := make(chan tcpProbeResult, len(ports))
 	var wg sync.WaitGroup
 
 	for _, port := range ports {
@@ -369,10 +419,16 @@ func (d *Detector) sweepTCP(ctx context.Context, host string, ports []int, timeo
 			}
 			res := d.probeTCP(sweepCtx, host, p, timeout)
 			if res.Online {
-				select {
-				case resultChan <- true:
-					cancel()
-				default:
+				cancel()
+			}
+			select {
+			case resultChan <- res:
+			case <-sweepCtx.Done():
+				if res.Online {
+					select {
+					case resultChan <- res:
+					default:
+					}
 				}
 			}
 		}(port)
@@ -383,12 +439,23 @@ func (d *Detector) sweepTCP(ctx context.Context, host string, ports []int, timeo
 		close(resultChan)
 	}()
 
-	for found := range resultChan {
-		if found {
-			return true
+	finished := 0
+	unreachable := 0
+	for res := range resultChan {
+		attempted = true
+		finished++
+		if res.Online {
+			hit = true
+		}
+		if res.Unreachable {
+			unreachable++
 		}
 	}
-	return false
+	if hit {
+		return true, false, true
+	}
+	allUnreachable = attempted && finished > 0 && unreachable == finished
+	return false, allUnreachable, attempted
 }
 
 func (d *Detector) ping(ctx context.Context, host string, timeout time.Duration) (time.Duration, error) {
@@ -396,6 +463,13 @@ func (d *Detector) ping(ctx context.Context, host string, timeout time.Duration)
 		return d.pingFn(ctx, host, timeout)
 	}
 	return defaultPing(ctx, host, timeout)
+}
+
+func (d *Detector) neighbor(ctx context.Context, host string) bool {
+	if d.neighborFn != nil {
+		return d.neighborFn(ctx, host)
+	}
+	return defaultNeighbor(ctx, host)
 }
 
 func defaultPing(ctx context.Context, host string, timeout time.Duration) (time.Duration, error) {
@@ -467,4 +541,23 @@ func isConnectionRefused(err error) bool {
 	return strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "actively refused") ||
 		strings.Contains(msg, "wsaeconnrefused")
+}
+
+func isHostUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) {
+		return true
+	}
+	var sysErr syscall.Errno
+	if errors.As(err, &sysErr) && (sysErr == syscall.EHOSTUNREACH || sysErr == syscall.ENETUNREACH) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "host is unreachable") ||
+		strings.Contains(msg, "wsaehostunreach") ||
+		strings.Contains(msg, "wsaenetunreach")
 }
