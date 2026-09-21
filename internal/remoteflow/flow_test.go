@@ -40,6 +40,41 @@ func TestOpenUsesOnlyGeneratedLocalSession(t *testing.T) {
 	}
 }
 
+func TestOpenNativeDesktopSkipsBrowserRuntime(t *testing.T) {
+	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	device, err := repository.CreateDevice(t.Context(), store.Device{Name: "windows", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := store.RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, Port: 3389, VerifyPort: 3389, Mode: "native", Enabled: true}
+	manager := New(repository, func(context.Context, string) error { return nil })
+	defer manager.Close()
+	manager.probe = func(context.Context, string, int) bool { return true }
+	manager.start = func(context.Context, localremote.Config) (*localremote.Session, error) {
+		t.Fatal("browser runtime should not start for native desktop")
+		return nil, nil
+	}
+	opened := false
+	manager.startDesktop = func(ctx context.Context, got store.RemoteProfile) error {
+		opened = true
+		if got.Host != device.IPAddress {
+			t.Fatalf("desktop host = %s", got.Host)
+		}
+		return nil
+	}
+	msg, err := manager.Open(t.Context(), device, profile, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opened || msg == "" {
+		t.Fatalf("native open msg=%q opened=%v", msg, opened)
+	}
+}
+
 func TestOpenAfterCloseDoesNotPublishSession(t *testing.T) {
 	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
 	if err != nil {

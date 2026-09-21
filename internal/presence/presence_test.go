@@ -345,3 +345,104 @@ func TestIsConnectionRefused(t *testing.T) {
 		t.Errorf("timeout should not be refused")
 	}
 }
+
+func TestIsHostUnreachable(t *testing.T) {
+	if isHostUnreachable(nil) {
+		t.Errorf("nil error should not be unreachable")
+	}
+	if !isHostUnreachable(syscall.EHOSTUNREACH) {
+		t.Errorf("syscall.EHOSTUNREACH should be unreachable")
+	}
+	if !isHostUnreachable(errors.New("dial tcp 192.168.8.200:3389: connect: no route to host")) {
+		t.Errorf("no route to host should be unreachable")
+	}
+	if isHostUnreachable(errors.New("i/o timeout")) {
+		t.Errorf("timeout should not be unreachable")
+	}
+	if isHostUnreachable(syscall.ECONNREFUSED) {
+		t.Errorf("connection refused should not be unreachable")
+	}
+}
+
+func TestARPFallbackOnHostUnreachable(t *testing.T) {
+	d := NewDetector(
+		WithAllowLoopback(true),
+		WithTCPPorts([]int{3389}),
+		WithDialTCP(func(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error) {
+			return nil, errors.New("dial tcp 192.168.8.200:3389: connect: no route to host")
+		}),
+		WithPing(func(ctx context.Context, host string, timeout time.Duration) (time.Duration, error) {
+			return 0, errors.New("ping failed")
+		}),
+		WithNeighbor(func(ctx context.Context, host string) bool {
+			return host == "192.168.8.200"
+		}),
+	)
+
+	res := d.Probe(context.Background(), Target{
+		DeviceID:   "windows",
+		IPAddress:  "192.168.8.200",
+		VerifyPort: 3389,
+	}, 1*time.Second)
+
+	if res.Status != StatusOnline {
+		t.Fatalf("expected StatusOnline via ARP, got %q message=%q", res.Status, res.Message)
+	}
+	if res.Method != MethodARP {
+		t.Fatalf("expected MethodARP, got %q", res.Method)
+	}
+}
+
+func TestHostUnreachableWithoutNeighborIsUnknown(t *testing.T) {
+	d := NewDetector(
+		WithAllowLoopback(true),
+		WithTCPPorts([]int{3389}),
+		WithDialTCP(func(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error) {
+			return nil, errors.New("connect: no route to host")
+		}),
+		WithPing(func(ctx context.Context, host string, timeout time.Duration) (time.Duration, error) {
+			return 0, errors.New("ping failed")
+		}),
+		WithNeighbor(func(ctx context.Context, host string) bool { return false }),
+	)
+
+	res := d.Probe(context.Background(), Target{
+		DeviceID:   "windows",
+		IPAddress:  "192.168.8.200",
+		VerifyPort: 3389,
+	}, 1*time.Second)
+
+	if res.Status != StatusUnknown {
+		t.Fatalf("expected StatusUnknown, got %q", res.Status)
+	}
+	if res.Method != MethodNone {
+		t.Fatalf("expected MethodNone, got %q", res.Method)
+	}
+	if res.Message == "" {
+		t.Fatal("expected a local-network message")
+	}
+}
+
+func TestStaleARPIgnoredOnTCPTimeout(t *testing.T) {
+	d := NewDetector(
+		WithAllowLoopback(true),
+		WithTCPPorts([]int{22}),
+		WithDialTCP(func(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error) {
+			return nil, errors.New("i/o timeout")
+		}),
+		WithPing(func(ctx context.Context, host string, timeout time.Duration) (time.Duration, error) {
+			return 0, errors.New("ping failed")
+		}),
+		WithNeighbor(func(ctx context.Context, host string) bool { return true }),
+	)
+
+	res := d.Probe(context.Background(), Target{
+		DeviceID:   "stale",
+		IPAddress:  "192.168.1.99",
+		VerifyPort: 22,
+	}, 500*time.Millisecond)
+
+	if res.Status != StatusOffline {
+		t.Fatalf("expected StatusOffline when TCP timed out, got %q via %s", res.Status, res.Method)
+	}
+}

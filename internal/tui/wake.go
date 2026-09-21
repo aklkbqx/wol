@@ -16,6 +16,7 @@ import (
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/remoteflow"
 	"github.com/aklkbqx/wol/internal/remoteopen"
+	"github.com/aklkbqx/wol/internal/scanner"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
 	tea "github.com/charmbracelet/bubbletea"
@@ -64,6 +65,7 @@ type probeResultMsg struct {
 	requestID uint64
 	deviceID  string
 	status    string
+	method    string
 	err       error
 }
 
@@ -71,8 +73,19 @@ type probeBatchMsg struct {
 	requestID uint64
 	kind      loadingKind
 	statuses  map[string]string
+	methods   map[string]string
 	summary   presence.Summary
 	err       error
+}
+
+type lanDiscoverMsg struct {
+	devices  []store.Device
+	profiles []store.RemoteProfile
+	known    []scanner.LANHost
+	moved    []scanner.LANHost
+	unknown  []presence.Neighbor
+	updated  int
+	err      error
 }
 
 type wakeTickMsg struct {
@@ -133,18 +146,24 @@ type WakeModel struct {
 	theme         Theme
 	motion        Motion
 
-	width    int
-	height   int
-	tab      int
-	selected int
-	devices  []store.Device
-	sites    []store.Site
-	relays   []store.WakeRelay
-	history  []store.WakeAttempt
-	profiles map[string]store.RemoteProfile
-	presence map[string]string
-	detector *presence.Detector
-	pending  *wakeDataMsg
+	width          int
+	height         int
+	tab            int
+	selected       int
+	devices        []store.Device
+	sites          []store.Site
+	relays         []store.WakeRelay
+	history        []store.WakeAttempt
+	profiles       map[string]store.RemoteProfile
+	presence       map[string]string
+	presenceMethod map[string]string
+	detector       *presence.Detector
+	pending        *wakeDataMsg
+	lanOpen        bool
+	lanHosts       []scanner.LANHost
+	lanUnknown     []presence.Neighbor
+	lanSelected    int
+	lanUpdated     int
 
 	phase         viewPhase
 	loadingKind   loadingKind
@@ -192,24 +211,25 @@ func NewWakeModel(repository *store.Store, version, credit string) *WakeModel {
 		credit = buildinfo.Credit
 	}
 	return &WakeModel{
-		repository:    repository,
-		service:       wakeservice.NewService(repository, wakeservice.Hooks{}),
-		version:       version,
-		credit:        credit,
-		theme:         DetectTheme(),
-		motion:        NewMotion(MotionEnabled()),
-		width:         80,
-		height:        24,
-		presence:      make(map[string]string),
-		profiles:      make(map[string]store.RemoteProfile),
-		streaming:     make(map[string]bool),
-		checkedDevice: make(map[string]time.Time),
-		detector:      presence.NewDetector(),
-		status:        "Loading local inventory...",
-		loading:       true,
-		phase:         phaseBootLoading,
-		loadingKind:   loadingBoot,
-		loadingStage:  stageInventory,
+		repository:     repository,
+		service:        wakeservice.NewService(repository, wakeservice.Hooks{}),
+		version:        version,
+		credit:         credit,
+		theme:          DetectTheme(),
+		motion:         NewMotion(MotionEnabled()),
+		width:          80,
+		height:         24,
+		presence:       make(map[string]string),
+		presenceMethod: make(map[string]string),
+		profiles:       make(map[string]store.RemoteProfile),
+		streaming:      make(map[string]bool),
+		checkedDevice:  make(map[string]time.Time),
+		detector:       presence.NewDetector(),
+		status:         "Loading local inventory...",
+		loading:        true,
+		phase:          phaseBootLoading,
+		loadingKind:    loadingBoot,
+		loadingStage:   stageInventory,
 	}
 }
 
@@ -269,7 +289,7 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.pending = &value
 		if len(value.devices) == 0 {
-			m.commitPending(nil, presence.Summary{})
+			m.commitPending(nil, nil, presence.Summary{})
 			return m, nil
 		}
 		m.loadingStage = stagePresence
@@ -360,11 +380,21 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.ensurePresence()
 			m.presence[value.deviceID] = value.status
+			if m.presenceMethod == nil {
+				m.presenceMethod = make(map[string]string)
+			}
+			if value.method != "" {
+				m.presenceMethod[value.deviceID] = value.method
+			}
 			if m.checkedDevice == nil {
 				m.checkedDevice = make(map[string]time.Time)
 			}
 			m.checkedDevice[value.deviceID] = time.Now()
-			m.status = m.deviceName(value.deviceID) + " · power " + strings.ToUpper(value.status) + "."
+			status := strings.ToUpper(value.status)
+			if value.method != "" && value.method != "none" {
+				status += " via " + value.method
+			}
+			m.status = m.deviceName(value.deviceID) + " · power " + status + "."
 		}
 		return m, nil
 	case probeBatchMsg:
@@ -374,8 +404,10 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if value.err != nil {
 			return m, m.failLoading("Power check failed.")
 		}
-		m.commitPending(value.statuses, value.summary)
+		m.commitPending(value.statuses, value.methods, value.summary)
 		return m, nil
+	case lanDiscoverMsg:
+		return m, m.applyLANDiscover(value)
 	case wakeTickMsg:
 		if value.id != 0 && value.id != m.motionID {
 			return m, nil
@@ -477,6 +509,9 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.actionPicker {
 		return m.handleActionPicker(keyName)
 	}
+	if m.lanOpen {
+		return m.handleLANKey(keyName)
+	}
 	if keyName == "esc" && (m.waking || m.opening || m.shuttingDown) {
 		target := m.actionTarget
 		m.cancelAction()
@@ -564,6 +599,10 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "r":
 		return m.beginRefresh(loadingRefresh)
+	case "n":
+		if m.tab == 0 {
+			return m.beginLANDiscover()
+		}
 	case "a":
 		m.beginAdd()
 	case "e":
@@ -699,6 +738,44 @@ func (m *WakeModel) motionTick() tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg { return wakeTickMsg{id: id} })
 }
 
+func (m *WakeModel) versionLabel() string {
+	version := strings.TrimSpace(m.version)
+	if version == "" {
+		return ""
+	}
+	if version[0] == 'v' || version[0] == 'V' {
+		return version
+	}
+	return "v" + version
+}
+
+func (m *WakeModel) versionMark() string {
+	label := m.versionLabel()
+	if label == "" {
+		return ""
+	}
+	style := m.theme.muted()
+	if strings.Contains(strings.ToLower(m.version), "dev") {
+		style = m.theme.accent()
+	}
+	return style.Render(label)
+}
+
+func (m *WakeModel) brandMark() string {
+	if m.theme.ASCII {
+		return m.theme.title().Render("wol")
+	}
+	return m.theme.cyan().Render("⚡ wol command center")
+}
+
+func (m *WakeModel) compactBrand() string {
+	mark := m.theme.title().Render("wol")
+	if version := m.versionMark(); version != "" {
+		return mark + "  " + version
+	}
+	return mark
+}
+
 func (m *WakeModel) View() string {
 	width := m.width
 	if width <= 0 {
@@ -714,17 +791,9 @@ func (m *WakeModel) View() string {
 	}
 	var builder strings.Builder
 	var headerParts []string
-	if m.theme.ASCII {
-		headerParts = append(headerParts, m.theme.title().Render("wol"))
-	} else {
-		headerParts = append(headerParts, m.theme.cyan().Render("⚡ wol command center"))
-	}
-	if strings.Contains(m.version, "dev") {
-		if m.theme.ASCII {
-			headerParts = append(headerParts, m.theme.accent().Render("dev"))
-		} else {
-			headerParts = append(headerParts, m.theme.accent().Render("[dev]"))
-		}
+	headerParts = append(headerParts, m.brandMark())
+	if version := m.versionMark(); version != "" {
+		headerParts = append(headerParts, version)
 	}
 	if m.stale {
 		headerParts = append(headerParts, m.theme.danger().Render("STALE"))
@@ -739,6 +808,8 @@ func (m *WakeModel) View() string {
 
 	if m.form != nil {
 		builder.WriteString("\n" + m.renderForm(inner))
+	} else if m.lanOpen && m.tab == 0 {
+		builder.WriteString("\n" + m.renderLANDiscover(inner))
 	} else {
 		builder.WriteString("\n")
 		switch m.tab {
@@ -778,6 +849,7 @@ func (m *WakeModel) View() string {
 			"s       check power",
 			"p       remote setup",
 			"r       refresh",
+			"n       discover LAN",
 			"a e d   add, edit, delete",
 			"tab     machines / routes / activity",
 			"/       filter",

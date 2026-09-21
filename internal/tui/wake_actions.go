@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aklkbqx/wol/internal/presence"
+	"github.com/aklkbqx/wol/internal/remoteopen"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
 	tea "github.com/charmbracelet/bubbletea"
@@ -60,6 +61,9 @@ func (m *WakeModel) beginWakeAndRemote() tea.Cmd {
 	if err := validateRemoteProfile(profile); err != nil {
 		m.status = "Local remote profile is incomplete: " + err.Error() + ". Press p to fix it."
 		return nil
+	}
+	if remoteopen.DesktopProtocol(profile.Protocol) {
+		profile.Mode = "native"
 	}
 	if m.wakeAndRemote == nil {
 		m.status = "Local remote runtime is unavailable. Run wol remote doctor, then try again."

@@ -10,8 +10,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aklkbqx/wol/internal/localremote"
 	"github.com/aklkbqx/wol/internal/moonlight"
 	config "github.com/aklkbqx/wol/internal/networkconfig"
+	"github.com/aklkbqx/wol/internal/presence"
+	"github.com/aklkbqx/wol/internal/store"
 	"github.com/aklkbqx/wol/internal/ui"
 )
 
@@ -50,14 +53,10 @@ func RunDoctorWithEnv(rootDir string, defaults []string) *DoctorReport {
 		mu.Unlock()
 	}
 
-	// 1. Local wake toolchain checks
 	tools := []struct{ name, cmd string }{
 		{"SSH Client", "ssh"},
 		{"Ping", "ping"},
-		{"Local etherwake", "etherwake"},
-		{"ZeroTier CLI", "zerotier-cli"},
 	}
-
 	for _, t := range tools {
 		if path, err := exec.LookPath(t.cmd); err == nil {
 			add("Toolchain", t.name, "OK", path)
@@ -65,40 +64,41 @@ func RunDoctorWithEnv(rootDir string, defaults []string) *DoctorReport {
 			add("Toolchain", t.name, "WARN", "Not found in PATH")
 		}
 	}
+	add("Wake", "Magic packet", "OK", "built-in UDP broadcast; etherwake is only used on SSH relays")
 
-	// Moonlight client check
 	if moonClient, err := moonlight.Detect(); err == nil {
 		add("Toolchain", "Moonlight Client", "OK", moonClient.ExecutablePath)
 	} else {
-		add("Toolchain", "Moonlight Client", "WARN", "Not installed (https://moonlight-stream.org)")
+		add("Toolchain", "Moonlight Client", "WARN", "optional; install from https://moonlight-stream.org for Sunshine")
 	}
 
-	// 2. Local ZeroTier Daemon Status
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "zerotier-cli", "status")
-		out, err := cmd.Output()
-		if err == nil && strings.Contains(string(out), "ONLINE") {
-			parts := strings.Fields(string(out))
-			ztID := ""
-			if len(parts) >= 3 {
-				ztID = parts[2]
-			}
-			add("ZeroTier", "Local ZeroTier Node", "OK", fmt.Sprintf("ONLINE (Node ID: %s)", ztID))
-		} else {
-			add("ZeroTier", "Local ZeroTier Node", "WARN", "Daemon not running or offline")
-		}
-	}()
+	addInventory(add)
 
-	// 3. Network probes loaded from the same config used by wol scan.
+	ctxDocker, cancelDocker := context.WithTimeout(context.Background(), 4*time.Second)
+	if dockerReport, err := localremote.Doctor(ctxDocker); err == nil {
+		status := "WARN"
+		detail := "optional; used only for browser remotes"
+		if dockerReport.DockerCLI && dockerReport.DockerDaemon {
+			status = "OK"
+			detail = "CLI and daemon ready"
+		} else if len(dockerReport.Problems) > 0 {
+			detail = dockerReport.Problems[0]
+		}
+		add("Remote", "Docker (browser sessions)", status, detail)
+	}
+	cancelDocker()
+
 	networkTargets, configErr := config.LoadNetworkTargetsWithEnv(rootDir, defaults)
 	if configErr != nil {
 		add("Configuration", "Network Targets", "FAIL", configErr.Error())
-	} else if len(networkTargets) == 0 {
-		add("Configuration", "Network Targets", "WARN", "No network targets configured")
+	}
+
+	if usesZeroTier(networkTargets) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			addZeroTier(add)
+		}()
 	}
 
 	for _, nt := range networkTargets {
@@ -134,8 +134,6 @@ func RunDoctorWithEnv(rootDir string, defaults []string) *DoctorReport {
 		}
 		if relayConfigured {
 			add("WOL Relay", "Router Etherwake Tool", "WARN", "SSH handshake or etherwake binary missing on configured relays")
-		} else {
-			add("WOL Relay", "Router Etherwake Tool", "WARN", "No WOL relay configured")
 		}
 	}()
 
@@ -147,6 +145,59 @@ func RunDoctorWithEnv(rootDir string, defaults []string) *DoctorReport {
 		return report.Items[i].Category < report.Items[j].Category
 	})
 	return report
+}
+
+func addInventory(add func(cat, name, status, details string)) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	repository, err := store.Open(store.DefaultDatabasePath())
+	if err != nil {
+		add("Inventory", "Database", "WARN", "could not open local inventory")
+		return
+	}
+	defer repository.Close()
+	devices, err := repository.ListDevices(ctx)
+	if err != nil {
+		add("Inventory", "Machines", "FAIL", err.Error())
+		return
+	}
+	add("Inventory", "Machines", "OK", fmt.Sprintf("%d stored", len(devices)))
+	neighbors, err := presence.ListNeighbors(ctx)
+	if err != nil {
+		add("Inventory", "LAN neighbors", "WARN", err.Error())
+		return
+	}
+	add("Inventory", "LAN neighbors", "OK", fmt.Sprintf("%d complete ARP entries", len(neighbors)))
+}
+
+func usesZeroTier(targets []config.NetworkTarget) bool {
+	for _, target := range targets {
+		if strings.EqualFold(target.Type, "zerotier") {
+			return true
+		}
+	}
+	return false
+}
+
+func addZeroTier(add func(cat, name, status, details string)) {
+	if _, err := exec.LookPath("zerotier-cli"); err != nil {
+		add("ZeroTier", "Local ZeroTier Node", "WARN", "zerotier-cli not found in PATH")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "zerotier-cli", "status")
+	out, err := cmd.Output()
+	if err == nil && strings.Contains(string(out), "ONLINE") {
+		parts := strings.Fields(string(out))
+		ztID := ""
+		if len(parts) >= 3 {
+			ztID = parts[2]
+		}
+		add("ZeroTier", "Local ZeroTier Node", "OK", fmt.Sprintf("ONLINE (Node ID: %s)", ztID))
+		return
+	}
+	add("ZeroTier", "Local ZeroTier Node", "WARN", "Daemon not running or offline")
 }
 
 func findRemoteEtherwake(host string) ([]byte, error) {

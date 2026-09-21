@@ -49,6 +49,7 @@ func runRemote(arguments []string) int {
 	flags := flagSet("remote")
 	databasePath := flags.String("db", envString("WOL_DB", store.DefaultDatabasePath()), "SQLite database path")
 	noWake := flags.Bool("no-wake", false, "do not wake an unreachable machine")
+	browser := flags.Bool("browser", false, "use localhost Guacamole instead of the native client")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
@@ -68,6 +69,15 @@ func runRemote(arguments []string) int {
 		return 2
 	}
 
+	if *browser {
+		if !remoteopen.DesktopProtocol(profile.Protocol) {
+			fmt.Fprintln(os.Stderr, "--browser supports RDP, SSH, and VNC profiles; Sunshine uses Moonlight")
+			return 2
+		}
+		profile.Mode = "browser-local"
+	} else if remoteopen.DesktopProtocol(profile.Protocol) {
+		profile.Mode = "native"
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	manager := newRemoteManager(repository)
@@ -78,6 +88,10 @@ func runRemote(arguments []string) int {
 		return 3
 	}
 
+	if remoteopen.NativeDesktop(profile) {
+		fmt.Println(msg)
+		return 0
+	}
 	if profile.Mode == "native-moonlight" || profile.Protocol == "sunshine" {
 		fmt.Printf("%s\nPress Ctrl+C to disconnect.\n", msg)
 		waitForRemoteStop(ctx)
@@ -151,7 +165,7 @@ func runRemoteConfigure(arguments []string) int {
 	username := flags.String("username", "", "optional username hint; passwords are never stored")
 	domain := flags.String("domain", "", "optional RDP domain hint")
 	certificate := flags.String("certificate", "strict", "RDP certificate policy: strict or trust-local")
-	mode := flags.String("mode", "", "remote mode: native-moonlight or browser-local")
+	mode := flags.String("mode", "", "remote mode: native, native-moonlight, or browser-local")
 	app := flags.String("app", "Desktop", "Sunshine application name")
 	fps := flags.Int("fps", 0, "Moonlight streaming frame rate (e.g. 60, 120)")
 	res := flags.String("res", "", "Moonlight streaming resolution (e.g. 1920x1080, 2560x1440)")
@@ -181,6 +195,8 @@ func runRemoteConfigure(arguments []string) int {
 	if *mode == "" {
 		if strings.EqualFold(*protocol, "sunshine") {
 			*mode = "native-moonlight"
+		} else if remoteopen.DesktopProtocol(*protocol) {
+			*mode = "native"
 		} else {
 			*mode = "browser-local"
 		}
@@ -198,7 +214,7 @@ func runRemoteConfigure(arguments []string) int {
 	if profile.Protocol == "sunshine" {
 		fmt.Printf("Configured Sunshine remote for %s (%s %s:%d, mode: %s, app: %s, fps: %d, res: %s).\n", device.Name, profile.Protocol, profile.Host, profile.Port, profile.Mode, profile.AppName, profile.FPS, profile.Resolution)
 	} else {
-		fmt.Printf("Configured localhost remote for %s (%s %s:%d, certificate %s).\n", device.Name, profile.Protocol, profile.Host, profile.Port, profile.CertificatePolicy)
+		fmt.Printf("Configured remote for %s (%s %s:%d, mode: %s).\n", device.Name, profile.Protocol, profile.Host, profile.Port, profile.Mode)
 	}
 	return 0
 }
@@ -344,7 +360,7 @@ func runRemoteSetup(arguments []string) int {
 }
 
 func printRemoteUsage() {
-	fmt.Fprintln(os.Stderr, "usage: wol remote [--no-wake] <machine>")
+	fmt.Fprintln(os.Stderr, "usage: wol remote [--no-wake] [--browser] <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote pair [--pin 4-digit] <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote configure [options] <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote clear <machine>")

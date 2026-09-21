@@ -185,9 +185,9 @@ func (m *WakeModel) beginRemoteProfile() {
 	if !ok {
 		protocol, port := "ssh", 22
 		if strings.EqualFold(device.Platform, "windows") {
-			protocol, port = "sunshine", 47989
+			protocol, port = "rdp", 3389
 		}
-		mode := "browser-local"
+		mode := "native"
 		if protocol == "sunshine" {
 			mode = "native-moonlight"
 		}
@@ -379,9 +379,11 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			}
 			fps, _ := parseFormInt(values[4], 0)
 			proto := strings.ToLower(strings.TrimSpace(values[0]))
-			mode := "browser-local"
+			mode := "native"
 			if proto == "sunshine" {
 				mode = "native-moonlight"
+			} else if proto != "rdp" && proto != "ssh" && proto != "vnc" {
+				mode = "browser-local"
 			}
 			profile := store.RemoteProfile{
 				DeviceID:   form.id,
@@ -508,6 +510,11 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			strategy = "broadcast"
 		}
 		item := store.Device{DeviceType: "unknown", Platform: "unknown", Enabled: true}
+		if verifyPort == 3389 {
+			item.Platform = "windows"
+		} else if verifyPort == 22 {
+			item.Platform = "linux"
+		}
 		if form.id != "" {
 			item, err = m.repository.GetDevice(ctx, form.id)
 			if err != nil {

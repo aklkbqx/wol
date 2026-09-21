@@ -48,10 +48,12 @@ func (m *WakeModel) startPresenceScan(devices []store.Device, requestID uint64, 
 		defer cancel()
 		result := detector.ProbeBatch(ctx, targets, 2500*time.Millisecond)
 		statuses := make(map[string]string, len(result.Results))
+		methods := make(map[string]string, len(result.Results))
 		for _, item := range result.Results {
 			statuses[item.DeviceID] = string(item.Status)
+			methods[item.DeviceID] = string(item.Method)
 		}
-		return probeBatchMsg{requestID: requestID, kind: kind, statuses: statuses, summary: result.Summary}
+		return probeBatchMsg{requestID: requestID, kind: kind, statuses: statuses, methods: methods, summary: result.Summary}
 	}
 }
 
@@ -104,7 +106,7 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 		ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 		defer cancel()
 		result := detector.Probe(ctx, presence.Target{DeviceID: device.ID, IPAddress: device.IPAddress, VerifyPort: port}, 2500*time.Millisecond)
-		return probeResultMsg{requestID: requestID, deviceID: device.ID, status: string(result.Status)}
+		return probeResultMsg{requestID: requestID, deviceID: device.ID, status: string(result.Status), method: string(result.Method)}
 	}
 	return tea.Batch(checkCmd, motionCmd)
 }

@@ -62,13 +62,14 @@ func (m *WakeModel) renderActivity(width int) string {
 
 func (m *WakeModel) footer(width int) string {
 	if m.theme.ASCII || width < 48 {
-		return fitText(m.theme.muted().Render("enter choose   w wake   c stream   s check   x stop   ? help   q quit"), width)
+		return fitText(m.theme.muted().Render("enter choose   w wake   c stream   s check   n lan   x stop   ? help   q quit"), width)
 	}
 	shortcuts := []struct{ key, label string }{
 		{"enter", "choose"},
 		{"w", "wake"},
 		{"c", "stream"},
 		{"s", "check"},
+		{"n", "lan"},
 		{"x", "stop"},
 		{"?", "help"},
 		{"q", "quit"},

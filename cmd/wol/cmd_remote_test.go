@@ -9,18 +9,20 @@ import (
 )
 
 type fakeRemoteManager struct {
-	opened bool
-	wake   bool
-	url    string
+	opened  bool
+	wake    bool
+	url     string
+	profile store.RemoteProfile
 }
 
-func (m *fakeRemoteManager) Open(_ context.Context, _ store.Device, _ store.RemoteProfile, wake bool) (string, error) {
+func (m *fakeRemoteManager) Open(_ context.Context, _ store.Device, profile store.RemoteProfile, wake bool) (string, error) {
 	m.opened, m.wake = true, wake
+	m.profile = profile
 	return m.url, nil
 }
 func (*fakeRemoteManager) Close() error { return nil }
 
-func TestRunRemoteConfigureAndOpenLocalhost(t *testing.T) {
+func TestRunRemoteConfigureAndChooseNativeOrBrowser(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "wol.db")
 	repository, err := store.Open(databasePath)
 	if err != nil {
@@ -41,7 +43,7 @@ func TestRunRemoteConfigureAndOpenLocalhost(t *testing.T) {
 	}
 	profile, err := repository.GetRemoteProfile(t.Context(), device.ID)
 	repository.Close()
-	if err != nil || profile.Host != "192.168.50.200" || profile.Port != 3389 || profile.Mode != "browser-local" {
+	if err != nil || profile.Host != "192.168.50.200" || profile.Port != 3389 || profile.Mode != "native" {
 		t.Fatalf("profile = %+v, err = %v", profile, err)
 	}
 
@@ -49,12 +51,22 @@ func TestRunRemoteConfigureAndOpenLocalhost(t *testing.T) {
 	previousFactory, previousWait := newRemoteManager, waitForRemoteStop
 	t.Cleanup(func() { newRemoteManager, waitForRemoteStop = previousFactory, previousWait })
 	newRemoteManager = func(*store.Store) remoteManager { return fake }
-	waitForRemoteStop = func(context.Context) {}
+	waited := false
+	waitForRemoteStop = func(context.Context) { waited = true }
 	if code := runRemote([]string{"--db", databasePath, "windows"}); code != 0 {
 		t.Fatalf("remote open exit code = %d", code)
 	}
 	if !fake.opened || !fake.wake {
 		t.Fatalf("open = %v, auto wake = %v", fake.opened, fake.wake)
+	}
+	if waited || fake.profile.Mode != "native" {
+		t.Fatalf("native launch waited=%v mode=%s", waited, fake.profile.Mode)
+	}
+	if code := runRemote([]string{"--db", databasePath, "--browser", "windows"}); code != 0 {
+		t.Fatalf("browser open exit code = %d", code)
+	}
+	if !waited || fake.profile.Mode != "browser-local" {
+		t.Fatalf("browser launch waited=%v mode=%s", waited, fake.profile.Mode)
 	}
 }
 
@@ -103,4 +115,3 @@ func TestRunRemoteConfigureSunshine(t *testing.T) {
 		t.Fatalf("unexpected profile: %+v, err: %v", profile, err)
 	}
 }
-

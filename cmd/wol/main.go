@@ -166,7 +166,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  wol shutdown     Shutdown or schedule power-off for a machine")
 	fmt.Fprintln(os.Stderr, "  wol remote       Open or configure a machine's remote session")
 	fmt.Fprintln(os.Stderr, "  wol status       Check a stored machine's power state")
-	fmt.Fprintln(os.Stderr, "  wol scan         Discover local network targets")
+	fmt.Fprintln(os.Stderr, "  wol scan         Discover LAN neighbors; --add imports new hosts")
 	fmt.Fprintln(os.Stderr, "  wol doctor       Check the local wake toolchain")
 	fmt.Fprintln(os.Stderr, "  wol import       Import a portable inventory JSON file")
 	fmt.Fprintln(os.Stderr, "  wol export       Export portable inventory JSON")

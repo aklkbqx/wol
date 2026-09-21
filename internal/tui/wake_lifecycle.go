@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aklkbqx/wol/internal/presence"
+	"github.com/aklkbqx/wol/internal/scanner"
 	"github.com/aklkbqx/wol/internal/store"
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -41,6 +42,13 @@ func (m *WakeModel) loadData(parent context.Context, requestID uint64, kind load
 		if err != nil {
 			return wakeDataMsg{requestID: requestID, kind: kind, err: err}
 		}
+		if neighbors, nerr := scanner.ScanLAN(ctx); nerr == nil {
+			if _, err := scanner.SyncDeviceIPs(ctx, m.repository, devices, neighbors); err == nil {
+				if refreshed, err := m.repository.ListDevices(ctx); err == nil {
+					devices = refreshed
+				}
+			}
+		}
 		sites, err := m.repository.ListSites(ctx)
 		if err != nil {
 			return wakeDataMsg{requestID: requestID, kind: kind, err: err}
@@ -58,7 +66,7 @@ func (m *WakeModel) loadData(parent context.Context, requestID uint64, kind load
 	}
 }
 
-func (m *WakeModel) commitPending(statuses map[string]string, summary presence.Summary) {
+func (m *WakeModel) commitPending(statuses, methods map[string]string, summary presence.Summary) {
 	if m.pending == nil {
 		return
 	}
@@ -74,6 +82,10 @@ func (m *WakeModel) commitPending(statuses map[string]string, summary presence.S
 	m.presence = make(map[string]string, len(statuses))
 	for deviceID, status := range statuses {
 		m.presence[deviceID] = status
+	}
+	m.presenceMethod = make(map[string]string, len(methods))
+	for deviceID, method := range methods {
+		m.presenceMethod[deviceID] = method
 	}
 	count := 0
 	switch m.tab {

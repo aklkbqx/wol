@@ -93,13 +93,13 @@ func normalizeRemoteProfile(item RemoteProfile) (RemoteProfile, error) {
 		if item.Protocol == "sunshine" {
 			item.Mode = "native-moonlight"
 		} else {
-			item.Mode = "browser-local"
+			item.Mode = "native"
 		}
 	}
 	switch item.Mode {
-	case "browser-local", "native-moonlight", "web-moonlight":
+	case "native", "browser-local", "native-moonlight", "web-moonlight":
 	default:
-		return RemoteProfile{}, errors.New("remote mode must be browser-local, native-moonlight, or web-moonlight")
+		return RemoteProfile{}, errors.New("remote mode must be native, browser-local, native-moonlight, or web-moonlight")
 	}
 	if item.Protocol == "sunshine" {
 		if item.AppName == "" {

@@ -42,12 +42,17 @@ func runStatus(arguments []string) int {
 	}
 	port := device.VerifyPort
 	if port == 0 {
-		port = 3389
+		if profile, err := repository.GetRemoteProfile(context.Background(), device.ID); err == nil && profile.VerifyPort > 0 {
+			port = profile.VerifyPort
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	result := presence.NewDetector().Probe(ctx, presence.Target{DeviceID: device.ID, IPAddress: device.IPAddress, VerifyPort: port}, *timeout)
 	fmt.Printf("%s  %s  via %s  %dms\n", device.Name, strings.ToUpper(string(result.Status)), result.Method, result.LatencyMS)
+	if result.Message != "" {
+		fmt.Println(result.Message)
+	}
 	if result.Status == presence.StatusOnline {
 		return 0
 	}

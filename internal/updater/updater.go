@@ -105,9 +105,9 @@ func NewClient(currentVersion string, opts ...Option) *Client {
 	c := &Client{
 		CurrentVersion: currentVersion,
 		Repo:           DefaultRepo,
-		HTTPClient: &http.Client{},
-		BaseAPIURL: "https://api.github.com",
-		BaseWebURL: "https://github.com",
+		HTTPClient:     &http.Client{},
+		BaseAPIURL:     "https://api.github.com",
+		BaseWebURL:     "https://github.com",
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -277,11 +277,7 @@ func (c *Client) FetchReleaseByTag(ctx context.Context, tag string) (*Release, e
 		return &release, nil
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return &Release{
-			Tag:     normTag,
-			Name:    normTag,
-			HTMLURL: fmt.Sprintf("%s/%s/releases/tag/%s", c.BaseWebURL, c.Repo, normTag),
-		}, nil
+		return nil, fmt.Errorf("github release %s was not found", normTag)
 	}
 	return nil, fmt.Errorf("github returned HTTP %d for release %s", resp.StatusCode, normTag)
 }
@@ -389,7 +385,6 @@ func (c *Client) ExecuteUpdate(ctx context.Context, opts UpdateOptions) (*Update
 	result.InstalledPath = installedPath
 	return result, nil
 }
-
 
 func (c *Client) fetchTagFromRedirect(ctx context.Context, url string) (string, error) {
 	client := &http.Client{
