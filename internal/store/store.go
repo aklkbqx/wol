@@ -18,6 +18,11 @@ type Store struct {
 	db *sql.DB
 }
 
+type queryable interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 type Site struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
@@ -72,6 +77,8 @@ type WakeAttempt struct {
 	CreatedAt          string `json:"createdAt"`
 }
 
+const currentExportVersion = 5
+
 type ExportData struct {
 	Version        int             `json:"version"`
 	Sites          []Site          `json:"sites"`
@@ -79,6 +86,14 @@ type ExportData struct {
 	Groups         []Group         `json:"groups"`
 	WakeRelays     []WakeRelay     `json:"wakeRelays,omitempty"`
 	RemoteProfiles []RemoteProfile `json:"remoteProfiles,omitempty"`
+	PowerProfiles  []PowerProfile  `json:"powerProfiles,omitempty"`
+}
+
+func sqliteDSN(path string) string {
+	if path == ":memory:" || strings.Contains(path, "?") {
+		return path
+	}
+	return path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 }
 
 func Open(path string) (*Store, error) {
@@ -90,7 +105,7 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("create database directory %q: %w", dir, err)
 		}
 	}
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
@@ -708,12 +723,12 @@ func (s *Store) DeleteGroup(ctx context.Context, id string) error {
 	return tx.Commit()
 }
 
-func replaceMembers(ctx context.Context, tx *sql.Tx, groupID string, deviceIDs []string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM group_members WHERE group_id = ?`, groupID); err != nil {
+func replaceMembers(ctx context.Context, q queryable, groupID string, deviceIDs []string) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM group_members WHERE group_id = ?`, groupID); err != nil {
 		return err
 	}
 	for position, deviceID := range deviceIDs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO group_members (group_id, device_id, position) VALUES (?, ?, ?)`, groupID, deviceID, position); err != nil {
+		if _, err := q.ExecContext(ctx, `INSERT INTO group_members (group_id, device_id, position) VALUES (?, ?, ?)`, groupID, deviceID, position); err != nil {
 			return normalizeDBError(err)
 		}
 	}
@@ -772,51 +787,81 @@ func (s *Store) Export(ctx context.Context) (ExportData, error) {
 	if err != nil {
 		return ExportData{}, err
 	}
-	return ExportData{Version: 4, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays, RemoteProfiles: profiles}, nil
+	powerProfiles, err := s.ListPowerProfiles(ctx)
+	if err != nil {
+		return ExportData{}, err
+	}
+	return ExportData{Version: currentExportVersion, Sites: sites, Devices: devices, Groups: groups, WakeRelays: relays, RemoteProfiles: profiles, PowerProfiles: powerProfiles}, nil
 }
 
 func (s *Store) Import(ctx context.Context, data ExportData) error {
 	if data.Version == 0 {
 		data.Version = 1
 	}
-	if data.Version != 1 && data.Version != 2 && data.Version != 3 && data.Version != 4 {
+	if data.Version < 1 || data.Version > currentExportVersion {
 		return fmt.Errorf("unsupported export version %d", data.Version)
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	relayIDs := make(map[string]string, len(data.WakeRelays))
 	for _, relay := range data.WakeRelays {
-		imported, err := s.upsertWakeRelay(ctx, relay)
+		originalID := relay.ID
+		imported, err := s.upsertWakeRelayOn(ctx, tx, relay)
 		if err != nil {
 			return err
 		}
-		relayIDs[relay.ID] = imported.ID
-	}
-	for _, site := range data.Sites {
-		if err := s.upsertSite(ctx, site); err != nil {
-			return err
+		if originalID != "" {
+			relayIDs[originalID] = imported.ID
 		}
 	}
+
+	siteIDs := make(map[string]string, len(data.Sites))
+	for _, site := range data.Sites {
+		originalID := site.ID
+		imported, err := s.upsertSiteOn(ctx, tx, site)
+		if err != nil {
+			return err
+		}
+		if originalID != "" {
+			siteIDs[originalID] = imported.ID
+		}
+	}
+
 	deviceIDs := make(map[string]string, len(data.Devices))
 	for _, device := range data.Devices {
 		originalID := device.ID
 		if mapped, ok := relayIDs[device.WakeRelayID]; ok {
 			device.WakeRelayID = mapped
 		}
-		imported, err := s.upsertDevice(ctx, device)
+		if mapped, ok := siteIDs[device.SiteID]; ok {
+			device.SiteID = mapped
+		} else if strings.TrimSpace(device.SiteID) != "" {
+			device.SiteID = ""
+		}
+		imported, err := s.upsertDeviceOn(ctx, tx, device)
 		if err != nil {
 			return err
 		}
-		deviceIDs[originalID] = imported.ID
+		if originalID != "" {
+			deviceIDs[originalID] = imported.ID
+		}
 	}
+
 	for _, group := range data.Groups {
 		for index, oldID := range group.DeviceIDs {
 			if mapped, ok := deviceIDs[oldID]; ok {
 				group.DeviceIDs[index] = mapped
 			}
 		}
-		if err := s.upsertGroup(ctx, group); err != nil {
+		if err := s.upsertGroupOn(ctx, tx, group); err != nil {
 			return err
 		}
 	}
+
 	for _, profile := range data.RemoteProfiles {
 		mapped, ok := deviceIDs[profile.DeviceID]
 		if !ok {
@@ -824,51 +869,141 @@ func (s *Store) Import(ctx context.Context, data ExportData) error {
 		}
 		profile.ID = ""
 		profile.DeviceID = mapped
-		if _, err := s.UpsertRemoteProfile(ctx, profile); err != nil {
+		if _, err := s.upsertRemoteProfileOn(ctx, tx, profile); err != nil {
 			return err
 		}
 	}
-	return nil
+
+	for _, profile := range data.PowerProfiles {
+		mapped, ok := deviceIDs[profile.DeviceID]
+		if !ok {
+			return fmt.Errorf("power profile references unknown device %q", profile.DeviceID)
+		}
+		profile.ID = ""
+		profile.DeviceID = mapped
+		if _, err := s.upsertPowerProfileOn(ctx, tx, profile); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
-func (s *Store) upsertSite(ctx context.Context, item Site) error {
-	var existingID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM sites WHERE name = ?`, item.Name).Scan(&existingID)
-	if errors.Is(err, sql.ErrNoRows) {
-		_, err = s.CreateSite(ctx, item)
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	_, err = s.UpdateSite(ctx, existingID, item)
-	return err
+func (s *Store) upsertSite(ctx context.Context, item Site) (Site, error) {
+	return s.upsertSiteOn(ctx, s.db, item)
 }
 
 func (s *Store) upsertDevice(ctx context.Context, item Device) (Device, error) {
+	return s.upsertDeviceOn(ctx, s.db, item)
+}
+
+func (s *Store) upsertGroup(ctx context.Context, item Group) error {
+	return s.upsertGroupOn(ctx, s.db, item)
+}
+
+func (s *Store) upsertSiteOn(ctx context.Context, q queryable, item Site) (Site, error) {
 	var existingID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM devices WHERE mac_address = ?`, strings.ToLower(item.MACAddress)).Scan(&existingID)
+	err := q.QueryRowContext(ctx, `SELECT id FROM sites WHERE name = ?`, item.Name).Scan(&existingID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return s.CreateDevice(ctx, item)
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		item.ID = newID("site")
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		if item.DefaultPort == 0 {
+			item.DefaultPort = 9
+		}
+		_, err = q.ExecContext(ctx, `INSERT INTO sites (id, name, broadcast_address, default_port, default_interface, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.CreatedAt, item.UpdatedAt)
+		if err != nil {
+			return Site{}, normalizeDBError(err)
+		}
+		return item, nil
+	}
+	if err != nil {
+		return Site{}, err
+	}
+	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if item.DefaultPort == 0 {
+		item.DefaultPort = 9
+	}
+	result, err := q.ExecContext(ctx, `UPDATE sites SET name = ?, broadcast_address = ?, default_port = ?, default_interface = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), item.BroadcastAddress, item.DefaultPort, item.DefaultInterface, item.UpdatedAt, existingID)
+	if err != nil {
+		return Site{}, normalizeDBError(err)
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return Site{}, ErrNotFound
+	}
+	item.ID = existingID
+	return item, nil
+}
+
+func (s *Store) upsertDeviceOn(ctx context.Context, q queryable, item Device) (Device, error) {
+	var existingID string
+	err := q.QueryRowContext(ctx, `SELECT id FROM devices WHERE mac_address = ?`, strings.ToLower(item.MACAddress)).Scan(&existingID)
+	if errors.Is(err, sql.ErrNoRows) {
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		item.ID = newID("device")
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		if item.DeviceType == "" {
+			item.DeviceType = "unknown"
+		}
+		if item.Platform == "" {
+			item.Platform = "unknown"
+		}
+		if item.WakeStrategy == "" {
+			item.WakeStrategy = "broadcast"
+		}
+		_, err = q.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+		if err != nil {
+			return Device{}, normalizeDBError(err)
+		}
+		return item, nil
 	}
 	if err != nil {
 		return Device{}, err
 	}
-	return s.UpdateDevice(ctx, existingID, item)
+	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if item.Platform == "" {
+		item.Platform = "unknown"
+	}
+	if item.WakeStrategy == "" {
+		item.WakeStrategy = "broadcast"
+	}
+	result, err := q.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.UpdatedAt, existingID)
+	if err != nil {
+		return Device{}, normalizeDBError(err)
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return Device{}, ErrNotFound
+	}
+	return scanDevice(q.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, existingID))
 }
 
-func (s *Store) upsertGroup(ctx context.Context, item Group) error {
+func (s *Store) upsertGroupOn(ctx context.Context, q queryable, item Group) error {
 	var existingID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM groups_table WHERE name = ?`, item.Name).Scan(&existingID)
-	if errors.Is(err, sql.ErrNoRows) {
-		_, err = s.CreateGroup(ctx, item)
+	err := q.QueryRowContext(ctx, `SELECT id FROM groups_table WHERE name = ?`, item.Name).Scan(&existingID)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		item.ID = newID("group")
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		if _, err := q.ExecContext(ctx, `INSERT INTO groups_table (id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), item.Description, item.CreatedAt, item.UpdatedAt); err != nil {
+			return normalizeDBError(err)
+		}
+		return replaceMembers(ctx, q, item.ID, item.DeviceIDs)
+	case err != nil:
 		return err
+	default:
+		result, err := q.ExecContext(ctx, `UPDATE groups_table SET name = ?, description = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), item.Description, now, existingID)
+		if err != nil {
+			return normalizeDBError(err)
+		}
+		if count, _ := result.RowsAffected(); count == 0 {
+			return ErrNotFound
+		}
+		return replaceMembers(ctx, q, existingID, item.DeviceIDs)
 	}
-	if err != nil {
-		return err
-	}
-	_, err = s.UpdateGroup(ctx, existingID, item)
-	return err
 }
 
 var ErrNotFound = errors.New("not found")

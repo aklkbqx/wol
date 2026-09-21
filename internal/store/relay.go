@@ -73,15 +73,36 @@ func (s *Store) CreateWakeRelay(ctx context.Context, item WakeRelay) (WakeRelay,
 }
 
 func (s *Store) upsertWakeRelay(ctx context.Context, item WakeRelay) (WakeRelay, error) {
+	return s.upsertWakeRelayOn(ctx, s.db, item)
+}
+
+func (s *Store) upsertWakeRelayOn(ctx context.Context, q queryable, item WakeRelay) (WakeRelay, error) {
 	var existingID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM wake_relays WHERE name = ?`, strings.TrimSpace(item.Name)).Scan(&existingID)
+	err := q.QueryRowContext(ctx, `SELECT id FROM wake_relays WHERE name = ?`, strings.TrimSpace(item.Name)).Scan(&existingID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return s.CreateWakeRelay(ctx, item)
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		item.ID, item.CreatedAt, item.UpdatedAt = newID("relay"), now, now
+		normalizeWakeRelay(&item)
+		_, err = q.ExecContext(ctx, `INSERT INTO wake_relays (id, name, address, port, transport, interface_name, ssh_user, shared_secret_hash, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.TrimSpace(item.Address), item.Port, item.Transport, item.Interface, item.SSHUser, item.SharedSecretHash, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+		if err != nil {
+			return WakeRelay{}, normalizeDBError(err)
+		}
+		return item, nil
 	}
 	if err != nil {
 		return WakeRelay{}, err
 	}
-	return s.UpdateWakeRelay(ctx, existingID, item)
+	item.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	normalizeWakeRelay(&item)
+	result, err := q.ExecContext(ctx, `UPDATE wake_relays SET name = ?, address = ?, port = ?, transport = ?, interface_name = ?, ssh_user = ?, shared_secret_hash = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.TrimSpace(item.Address), item.Port, item.Transport, item.Interface, item.SSHUser, item.SharedSecretHash, boolInt(item.Enabled), item.UpdatedAt, existingID)
+	if err != nil {
+		return WakeRelay{}, normalizeDBError(err)
+	}
+	if count, _ := result.RowsAffected(); count == 0 {
+		return WakeRelay{}, ErrNotFound
+	}
+	item.ID = existingID
+	return item, nil
 }
 
 func (s *Store) UpdateWakeRelay(ctx context.Context, id string, item WakeRelay) (WakeRelay, error) {

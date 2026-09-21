@@ -194,6 +194,9 @@ func (s *Service) WakeDevice(ctx context.Context, deviceID string, options Optio
 	} else {
 		sendResult, sendErr := s.hooks.Direct(ctx, wol.SendRequest{MAC: mac, Destination: route.Destination, Port: route.Port, Interface: route.Interface, Repeat: repeat, Interval: interval})
 		packets = sendResult.Packets
+		if sendResult.Warning != "" {
+			detail = sendResult.Warning
+		}
 		if sendErr != nil {
 			attempt.PacketStatus = "failed"
 			attempt.Message = sendErr.Error()

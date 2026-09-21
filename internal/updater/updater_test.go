@@ -213,6 +213,23 @@ func TestCheckLatest(t *testing.T) {
 	}
 }
 
+func TestFetchReleaseByTagSurfacesHTTPErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	client := NewClient("0.4.11-dev",
+		WithBaseAPIURL(server.URL),
+		WithBaseWebURL(server.URL),
+		WithHTTPClient(server.Client()),
+	)
+	_, err := client.FetchReleaseByTag(context.Background(), "v0.4.10")
+	if err == nil {
+		t.Fatal("expected HTTP 403 to fail")
+	}
+}
+
 func TestReplaceExecutable(t *testing.T) {
 	tmpDir := t.TempDir()
 	binName := "wol-dummy"

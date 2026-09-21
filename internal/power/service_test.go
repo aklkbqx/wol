@@ -22,16 +22,16 @@ func TestDrivers(t *testing.T) {
 			sudo:     false,
 			delay:    0,
 			force:    false,
-			wantCmd:  "shutdown /s /t 0",
-			cancel:   "shutdown /a",
+			wantCmd:  "shutdown.exe /s /t 0",
+			cancel:   "shutdown.exe /a",
 		},
 		{
 			platform: "windows",
 			sudo:     false,
 			delay:    30 * time.Minute,
 			force:    true,
-			wantCmd:  "shutdown /s /f /t 1800",
-			cancel:   "shutdown /a",
+			wantCmd:  "shutdown.exe /s /f /t 1800",
+			cancel:   "shutdown.exe /a",
 		},
 		{
 			platform: "linux",
@@ -98,8 +98,8 @@ func TestServiceExecute(t *testing.T) {
 	if res.Action != ActionShutdownNow {
 		t.Errorf("got action %s, want %s", res.Action, ActionShutdownNow)
 	}
-	if res.Command != "shutdown /s /f /t 0" {
-		t.Errorf("got command %q, want shutdown /s /f /t 0", res.Command)
+	if res.Command != "shutdown.exe /s /f /t 0" {
+		t.Errorf("got command %q, want shutdown.exe /s /f /t 0", res.Command)
 	}
 
 	// Test scheduled shutdown
@@ -118,8 +118,8 @@ func TestServiceExecute(t *testing.T) {
 	if resSched.Action != ActionSchedule {
 		t.Errorf("got action %s, want %s", resSched.Action, ActionSchedule)
 	}
-	if resSched.Command != "shutdown /s /t 600" {
-		t.Errorf("got command %q, want shutdown /s /t 600", resSched.Command)
+	if resSched.Command != "shutdown.exe /s /t 600" {
+		t.Errorf("got command %q, want shutdown.exe /s /t 600", resSched.Command)
 	}
 
 	// Test cancel
@@ -138,14 +138,15 @@ func TestServiceExecute(t *testing.T) {
 	if resCancel.Action != ActionCancel {
 		t.Errorf("got action %s, want %s", resCancel.Action, ActionCancel)
 	}
-	if resCancel.Command != "shutdown /a" {
-		t.Errorf("got command %q, want shutdown /a", resCancel.Command)
+	if resCancel.Command != "shutdown.exe /a" {
+		t.Errorf("got command %q, want shutdown.exe /a", resCancel.Command)
 	}
 
 	// Test unsafe input
 	_, err = svc.Execute(context.Background(), Request{
 		Target: Target{
-			Host: "192.168.8.200; rm -rf /",
+			Host:     "192.168.8.200; rm -rf /",
+			Platform: "windows",
 		},
 	})
 	if err == nil {
@@ -155,10 +156,42 @@ func TestServiceExecute(t *testing.T) {
 	// Test failure propagation
 	_, err = svc.Execute(context.Background(), Request{
 		Target: Target{
-			Host: "fail.local",
+			Host:     "fail.local",
+			Platform: "windows",
 		},
 	})
 	if err == nil {
 		t.Error("expected error on mock failure")
+	}
+}
+
+func TestExecuteRejectsUnknownPlatformAndPartialDelays(t *testing.T) {
+	svc := NewService(func(context.Context, Target, string) (string, error) {
+		return "ok", nil
+	})
+	_, err := svc.Execute(context.Background(), Request{Target: Target{Host: "192.168.8.200"}})
+	if err == nil {
+		t.Fatal("expected unknown platform to fail")
+	}
+	_, err = svc.Execute(context.Background(), Request{
+		Target: Target{Host: "192.168.8.200", Platform: "linux"},
+		Delay:  90 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("expected sub-minute linux delay to fail")
+	}
+	_, err = svc.Execute(context.Background(), Request{
+		Target: Target{Host: "192.168.8.200", Platform: "windows"},
+		Delay:  500 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected sub-second windows delay to fail")
+	}
+	_, err = svc.Execute(context.Background(), Request{
+		Target: Target{Host: "192.168.8.200", Platform: "linux"},
+		Force:  true,
+	})
+	if err == nil {
+		t.Fatal("expected linux force to fail")
 	}
 }

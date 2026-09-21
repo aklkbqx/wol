@@ -26,6 +26,7 @@ type SendResult struct {
 	Port        int    `json:"port"`
 	Packets     int    `json:"packets"`
 	Bytes       int    `json:"bytes"`
+	Warning     string `json:"warning,omitempty"`
 }
 
 func ParseMAC(value string) (net.HardwareAddr, error) {
@@ -75,9 +76,13 @@ func Send(ctx context.Context, request SendRequest) (SendResult, error) {
 	if err != nil {
 		return SendResult{}, err
 	}
+	var ifaceWarning string
 	localAddress, err := localIPv4(request.Interface)
 	if err != nil {
 		localAddress = net.IPv4zero
+		if strings.TrimSpace(request.Interface) != "" {
+			ifaceWarning = fmt.Sprintf("interface %q unavailable; sending from 0.0.0.0", request.Interface)
+		}
 	}
 	conn, err := listenUDP(ctx, localAddress)
 	if err != nil {
@@ -86,7 +91,7 @@ func Send(ctx context.Context, request SendRequest) (SendResult, error) {
 	defer conn.Close()
 
 	destination := &net.UDPAddr{IP: request.Destination.To4(), Port: request.Port}
-	result := SendResult{Destination: destination.IP.String(), Port: destination.Port}
+	result := SendResult{Destination: destination.IP.String(), Port: destination.Port, Warning: ifaceWarning}
 	for i := 0; i < request.Repeat; i++ {
 		select {
 		case <-ctx.Done():
