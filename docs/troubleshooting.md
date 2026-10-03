@@ -4,6 +4,7 @@
 | --- | --- |
 | Packet sent, machine stays off | Firmware/NIC WOL, wired connection, sleep/shutdown support, correct MAC and broadcast |
 | Unknown with cached ARP | Cache is not live proof. Check firewall, macOS Local Network permission and routing |
+| macOS status unknown after go install | Run wol doctor; if Packaging warns, reinstall with make install or a release archive |
 | No neighbors discovered | Connect to the target LAN; discovery reads complete ARP entries rather than sweeping every address |
 | Other LAN unreachable | Establish your VPN/routing for probes and remote; configure a relay for wake broadcasts |
 | Relay port reachable but wake fails | Verify SSH batch-mode authentication, etherwake availability and router interface |
