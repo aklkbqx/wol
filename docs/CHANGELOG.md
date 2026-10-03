@@ -1,4 +1,4 @@
-# Unreleased — 0.4.13-dev
+# 0.4.13 — 2026-10-04
 
 - `wol doctor` warns on macOS when the executable lacks the embedded Local
   Network usage description (for example after `go install` or a
