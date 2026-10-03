@@ -73,6 +73,7 @@ func RunDoctorWithEnv(rootDir string, defaults []string) *DoctorReport {
 	}
 
 	addInventory(add)
+	addPackaging(add)
 
 	ctxDocker, cancelDocker := context.WithTimeout(context.Background(), 4*time.Second)
 	if dockerReport, err := localremote.Doctor(ctxDocker); err == nil {
