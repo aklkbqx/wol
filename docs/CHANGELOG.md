@@ -1,4 +1,10 @@
-# Unreleased — 0.4.12-dev
+# Unreleased — 0.4.13-dev
+
+- `wol doctor` warns on macOS when the executable lacks the embedded Local
+  Network usage description (for example after `go install` or a
+  source-build update), which otherwise makes status checks report unknown.
+
+# 0.4.12 — 2026-09-21
 
 - Sites with IPv4 subnet, direct/relay wake defaults, probe timeout and concurrency.
 - Inventory remains visible while checks stream in; search and navigation stay available.
