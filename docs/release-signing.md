@@ -55,6 +55,8 @@ and refuses missing, malformed or invalid signatures. It accepts the canonical
 `SHA256SUMS` manifest or the exact legacy `wol_VERSION_checksums.txt` filename.
 Archive names must begin with `wol_VERSION_` for the release's version, which
 prevents an older signed manifest from being relabelled as a newer release.
+An explicitly requested version must also match the release metadata returned
+by the server; a differently tagged signed release is refused.
 Source-build fallback is disabled in this mode. Failures leave the installed
 executable unchanged. `wol update --check` only checks release metadata; it
 does not verify signatures or install anything.
@@ -78,4 +80,6 @@ to 1 MiB; signatures to 64 bytes; PEM keys to 16 KiB. Extraction limits each
 binary to 128 MiB, tar expansion (including skipped data and metadata) to
 256 MiB, and archive entries to 4096. ZIP entries' declared uncompressed sizes
 must total at most 256 MiB and binary reads remain bounded even if metadata is
-incorrect. These limits apply before replacing the executable.
+incorrect. ZIP central-directory records are counted before the standard
+parser allocates entries; declared record counts are not trusted. These limits
+apply before replacing the executable.

@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/binary"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -159,5 +161,30 @@ func TestBoundedExtractionReaders(t *testing.T) {
 		if (size == 8 && err != nil) || (size == 9 && (err == nil || !strings.Contains(err.Error(), "total"))) {
 			t.Fatalf("size=%d err=%v", size, err)
 		}
+	}
+}
+
+func TestZIPEntryCapPrecedesDirectoryAllocation(t *testing.T) {
+	// 65537 records wrap to a declared 16-bit count of 1. Counting only the
+	// end record is insufficient; Go accepts the wrapped count after parsing.
+	const count = 65537
+	header := make([]byte, 46)
+	binary.LittleEndian.PutUint32(header, 0x02014b50)
+	content := bytes.Repeat(header, count)
+	end := make([]byte, 22)
+	binary.LittleEndian.PutUint32(end, 0x06054b50)
+	binary.LittleEndian.PutUint16(end[8:], 1)
+	binary.LittleEndian.PutUint16(end[10:], 1)
+	binary.LittleEndian.PutUint32(end[12:], uint32(len(content)))
+	content = append(content, end...)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got, err := ExtractBinary(content, "wol.zip")
+	runtime.ReadMemStats(&after)
+	if err == nil || !strings.Contains(err.Error(), "entry count") || got != nil {
+		t.Fatalf("bytes=%d err=%v", len(got), err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 1<<20 {
+		t.Fatalf("allocated %d bytes before rejecting an oversized ZIP directory", allocated)
 	}
 }
