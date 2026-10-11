@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -318,9 +320,15 @@ func TestExecuteUpdateWithAsset(t *testing.T) {
 						"name": "wol_0.5.0_` + runtime.GOOS + `_` + runtime.GOARCH + `.tar.gz",
 						"size": 100,
 						"browser_download_url": "` + server.URL + `/download/wol.tar.gz"
+					},
+					{
+						"name": "SHA256SUMS",
+						"browser_download_url": "` + server.URL + `/download/SHA256SUMS"
 					}
 				]
 			}`))
+		case "/download/SHA256SUMS":
+			_, _ = fmt.Fprintf(w, "%x  wol_0.5.0_%s_%s.tar.gz\n", sha256.Sum256(assetBytes), runtime.GOOS, runtime.GOARCH)
 		case "/download/wol.tar.gz":
 			w.Header().Set("Content-Type", "application/gzip")
 			_, _ = w.Write(assetBytes)

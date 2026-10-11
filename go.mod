@@ -1,6 +1,8 @@
 module github.com/aklkbqx/wol
 
-go 1.26.6
+go 1.26.9
+
+toolchain go1.27.2
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0

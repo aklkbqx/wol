@@ -1,6 +1,7 @@
 # Development and release
 
-Go 1.26.6 or newer is required. Versions are pinned in go.mod/go.sum.
+Go 1.26.9 or newer is required. The preferred release toolchain is Go 1.27.2.
+Versions are pinned in go.mod/go.sum; use a current security patch release.
 The current TUI uses Bubble Tea v1; do not copy v2 APIs into this codebase.
 
 ```sh
