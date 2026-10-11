@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"github.com/aklkbqx/wol/internal/releasesign"
 )
 
 const (
@@ -36,6 +38,39 @@ func (c *Client) downloadVerifiedAsset(ctx context.Context, release *Release, as
 	checksums, err := c.downloadAsset(ctx, manifest.BrowserDownloadURL, maxChecksumBytes)
 	if err != nil {
 		return nil, fmt.Errorf("download checksum manifest: %w", err)
+	}
+	if c.publicKeyFile != "" {
+		if !strings.HasPrefix(asset.Name, "wol_"+CleanVersion(release.Tag)+"_") {
+			return nil, fmt.Errorf("signed asset name does not match release version %s", release.Tag)
+		}
+		keyBytes, err := releasesign.ReadFile(c.publicKeyFile, releasesign.MaxKeyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("read trusted public key: %w", err)
+		}
+		key, err := releasesign.ParsePublicKey(keyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse trusted public key: %w", err)
+		}
+		var signature *Asset
+		for i := range release.Assets {
+			candidate := &release.Assets[i]
+			if candidate.Name == manifest.Name+".sig" {
+				if signature != nil {
+					return nil, fmt.Errorf("duplicate checksum signature asset")
+				}
+				signature = candidate
+			}
+		}
+		if signature == nil {
+			return nil, fmt.Errorf("release %s has no checksum signature", release.Tag)
+		}
+		sig, err := c.downloadAsset(ctx, signature.BrowserDownloadURL, 64)
+		if err != nil {
+			return nil, fmt.Errorf("download checksum signature: %w", err)
+		}
+		if err := releasesign.Verify(key, checksums, sig); err != nil {
+			return nil, err
+		}
 	}
 	expected, err := checksumForAsset(checksums, asset.Name)
 	if err != nil {

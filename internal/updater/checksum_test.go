@@ -41,8 +41,10 @@ func TestUpdateRequiresVerifiedArchive(t *testing.T) {
 		name, manifestName, manifest, wantError string
 		status                                  int
 		tamper, checkOnly                       bool
+		oversized                               bool
 	}{
 		{name: "valid", manifestName: "SHA256SUMS", manifest: valid},
+		{name: "oversized extraction", manifestName: "SHA256SUMS", oversized: true, wantError: "exceeds"},
 		{name: "legacy", manifestName: "wol_0.5.0_checksums.txt", manifest: valid},
 		{name: "CRLF binary mode uppercase", manifestName: "SHA256SUMS", manifest: strings.ToUpper(digest) + " *" + name + "\r\n"},
 		{name: "tampered", manifestName: "SHA256SUMS", manifest: valid, tamper: true, wantError: "checksum mismatch"},
@@ -57,6 +59,20 @@ func TestUpdateRequiresVerifiedArchive(t *testing.T) {
 		{name: "check only", checkOnly: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			data := append([]byte(nil), archive.Bytes()...)
+			if tc.oversized {
+				var oversized bytes.Buffer
+				gz := gzip.NewWriter(&oversized)
+				tw := tar.NewWriter(gz)
+				if err := tw.WriteHeader(&tar.Header{Name: "wol", Size: (128 << 20) + 1, Mode: 0755}); err != nil {
+					t.Fatal(err)
+				}
+				if err := gz.Close(); err != nil {
+					t.Fatal(err)
+				}
+				data = oversized.Bytes()
+				tc.manifest = fmt.Sprintf("%x  %s\n", sha256.Sum256(data), name)
+			}
 			var requests []string
 			var server *httptest.Server
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +90,7 @@ func TestUpdateRequiresVerifiedArchive(t *testing.T) {
 					}
 					_, _ = w.Write([]byte(tc.manifest))
 				case "/archive":
-					data := append([]byte(nil), archive.Bytes()...)
+					data := append([]byte(nil), data...)
 					if tc.tamper {
 						data = append(data, 'x')
 					}

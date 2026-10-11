@@ -63,6 +63,7 @@ type Client struct {
 	HTTPClient     *http.Client
 	BaseAPIURL     string
 	BaseWebURL     string
+	publicKeyFile  string
 }
 
 // Option configures a Client.
@@ -108,6 +109,7 @@ func NewClient(currentVersion string, opts ...Option) *Client {
 		HTTPClient:     &http.Client{},
 		BaseAPIURL:     "https://api.github.com",
 		BaseWebURL:     "https://github.com",
+		publicKeyFile:  strings.TrimSpace(os.Getenv("WOL_UPDATE_PUBLIC_KEY")),
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -369,6 +371,9 @@ func (c *Client) ExecuteUpdate(ctx context.Context, opts UpdateOptions) (*Update
 		binaryData = extracted
 	} else {
 		// 2. Fallback: compile from source via local Go toolchain
+		if c.publicKeyFile != "" {
+			return nil, errors.New("signed update requires a matching prebuilt release archive; source fallback is disabled")
+		}
 		data, err := BuildFromSource(ctx, c.Repo, release.Tag)
 		if err != nil {
 			return nil, fmt.Errorf("no prebuilt release asset for %s/%s, and build from source failed: %w", runtime.GOOS, runtime.GOARCH, err)
@@ -580,35 +585,31 @@ func (c *Client) downloadAsset(ctx context.Context, downloadURL string, maxBytes
 // ExtractBinary extracts the executable named 'wol' (or 'wol.exe') from an archive,
 // or returns the raw bytes if the file is an executable binary directly.
 func ExtractBinary(content []byte, assetName string) ([]byte, error) {
-	nameLower := strings.ToLower(assetName)
-
-	if strings.HasSuffix(nameLower, ".tar.gz") || strings.HasSuffix(nameLower, ".tgz") {
-		return extractFromTarGz(content)
-	}
-
-	if strings.HasSuffix(nameLower, ".zip") {
-		return extractFromZip(content)
-	}
-
-	// Raw binary
-	return content, nil
+	return extractBinaryWithLimits(content, assetName, releaseExtractionLimits)
 }
 
-func extractFromTarGz(content []byte) ([]byte, error) {
+func extractFromTarGz(content []byte, limits extractionLimits) ([]byte, error) {
 	gzr, err := gzip.NewReader(bytes.NewReader(content))
 	if err != nil {
 		return nil, fmt.Errorf("create gzip reader: %w", err)
 	}
 	defer gzr.Close()
 
-	tr := tar.NewReader(gzr)
-	for {
+	budget := &expansionReader{reader: gzr, remaining: limits.totalBytes}
+	tr := tar.NewReader(budget)
+	for count := 0; ; count++ {
 		header, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read tar entry: %w", err)
+		}
+		if count >= limits.entries {
+			return nil, errors.New("archive exceeds entry count limit")
+		}
+		if header.Size > budget.remaining {
+			return nil, errors.New("tar entry exceeds total extraction size limit")
 		}
 
 		if header.Typeflag != tar.TypeReg {
@@ -617,21 +618,34 @@ func extractFromTarGz(content []byte) ([]byte, error) {
 
 		baseName := filepath.Base(header.Name)
 		if isWolBinary(baseName) {
-			var buf bytes.Buffer
-			if _, err := io.Copy(&buf, tr); err != nil {
+			if header.Size > limits.binaryBytes {
+				return nil, errors.New("binary exceeds extraction size limit")
+			}
+			data, err := readBoundedBinary(tr, limits.binaryBytes)
+			if err != nil {
 				return nil, fmt.Errorf("extract binary from tar: %w", err)
 			}
-			return buf.Bytes(), nil
+			return data, nil
 		}
 	}
 
 	return nil, errors.New("wol binary not found inside tar.gz archive")
 }
 
-func extractFromZip(content []byte) ([]byte, error) {
+func extractFromZip(content []byte, limits extractionLimits) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		return nil, fmt.Errorf("create zip reader: %w", err)
+	}
+	if len(zr.File) > limits.entries {
+		return nil, errors.New("archive exceeds entry count limit")
+	}
+	var expanded uint64
+	for _, f := range zr.File {
+		if f.UncompressedSize64 > uint64(limits.totalBytes)-expanded {
+			return nil, errors.New("zip archive exceeds total extraction size limit")
+		}
+		expanded += f.UncompressedSize64
 	}
 
 	for _, file := range zr.File {
@@ -641,17 +655,20 @@ func extractFromZip(content []byte) ([]byte, error) {
 
 		baseName := filepath.Base(file.Name)
 		if isWolBinary(baseName) {
+			if file.UncompressedSize64 > uint64(limits.binaryBytes) {
+				return nil, errors.New("binary exceeds extraction size limit")
+			}
 			rc, err := file.Open()
 			if err != nil {
 				return nil, fmt.Errorf("open zip entry: %w", err)
 			}
 			defer rc.Close()
 
-			var buf bytes.Buffer
-			if _, err := io.Copy(&buf, rc); err != nil {
+			data, err := readBoundedBinary(rc, limits.binaryBytes)
+			if err != nil {
 				return nil, fmt.Errorf("extract binary from zip: %w", err)
 			}
-			return buf.Bytes(), nil
+			return data, nil
 		}
 	}
 
