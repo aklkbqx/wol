@@ -182,6 +182,91 @@ func TestThreeSiteInventoryBatchAcceptance(t *testing.T) {
 	}
 }
 
+func TestCancelledWakeRetryPreservesCompletedTargets(t *testing.T) {
+	repo, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	site, err := repo.CreateSite(t.Context(), store.Site{Name: "test-site", DefaultPort: 9, Concurrency: 1, TimeoutMS: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		_, err = repo.CreateDevice(t.Context(), store.Device{Name: fmt.Sprintf("pc-%03d", i), MACAddress: fmt.Sprintf("02:00:00:00:00:%02x", i), SiteID: site.ID, Enabled: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := NewWakeModel(repo, "test", "test")
+	m.phase, m.loading = phaseReady, false
+	m.devices, err = repo.ListDevices(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.sites = []store.Site{site}
+	m.marked = make(map[string]bool)
+	for _, d := range m.devices {
+		m.marked[d.ID] = true
+	}
+	var calls atomic.Int32
+	blocked := make(chan struct{})
+	m.service = wakeservice.NewService(repo, wakeservice.Hooks{Direct: func(ctx context.Context, _ wol.SendRequest) (wol.SendResult, error) {
+		if calls.Add(1) == 1 {
+			return wol.SendResult{Packets: 1}, nil
+		}
+		close(blocked)
+		<-ctx.Done()
+		return wol.SendResult{}, ctx.Err()
+	}})
+	m.prepareBatch("wake")
+	cmd := m.startBatch()
+	defer m.batchCancel()
+	_, cmd = m.Update(cmd())
+	if len(m.batchResults) != 1 || m.batchResults[0].Status != "sent" {
+		t.Fatal("first target did not succeed")
+	}
+	completedID := m.batchResults[0].DeviceID
+	select {
+	case <-blocked:
+	case <-time.After(time.Second):
+		t.Fatal("second operation did not start")
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	for cmd != nil {
+		_, cmd = m.Update(cmd())
+	}
+	if calls.Load() != 2 || len(m.batchResults) != 100 || m.batchRunning {
+		t.Fatalf("cancel: calls=%d results=%d running=%t", calls.Load(), len(m.batchResults), m.batchRunning)
+	}
+	m.retryBatch()
+	if m.batchKind != "wake" || len(m.batchTargets) != 99 {
+		t.Fatalf("retry: kind=%s targets=%d", m.batchKind, len(m.batchTargets))
+	}
+	for _, d := range m.batchTargets {
+		if d.ID == completedID {
+			t.Fatal("retry includes completed target")
+		}
+	}
+	var retried atomic.Int32
+	m.service = wakeservice.NewService(repo, wakeservice.Hooks{Direct: func(context.Context, wol.SendRequest) (wol.SendResult, error) {
+		retried.Add(1)
+		return wol.SendResult{Packets: 1}, nil
+	}})
+	cmd = m.startBatch()
+	for cmd != nil {
+		_, cmd = m.Update(cmd())
+	}
+	if retried.Load() != 99 || len(m.batchResults) != 99 {
+		t.Fatal("retry lost cancelled targets")
+	}
+	for _, r := range m.batchResults {
+		if r.Status != "sent" {
+			t.Fatalf("retry did not recover: %s", r.Status)
+		}
+	}
+}
+
 func acceptanceInventoryValues(data store.ExportData) store.ExportData {
 	relays := map[string]string{"": ""}
 	sites := map[string]string{"": ""}
