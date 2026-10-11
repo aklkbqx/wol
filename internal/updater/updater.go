@@ -358,7 +358,7 @@ func (c *Client) ExecuteUpdate(ctx context.Context, opts UpdateOptions) (*Update
 	var binaryData []byte
 	asset := MatchAsset(release.Assets, runtime.GOOS, runtime.GOARCH)
 	if asset != nil {
-		data, err := c.DownloadAsset(ctx, asset.BrowserDownloadURL)
+		data, err := c.downloadVerifiedAsset(ctx, release, asset)
 		if err != nil {
 			return nil, fmt.Errorf("download release asset %s: %w", asset.Name, err)
 		}
@@ -546,6 +546,10 @@ func tokenContains(tokens []string, target string) bool {
 
 // DownloadAsset downloads the asset from the given URL.
 func (c *Client) DownloadAsset(ctx context.Context, downloadURL string) ([]byte, error) {
+	return c.downloadAsset(ctx, downloadURL, maxArchiveBytes)
+}
+
+func (c *Client) downloadAsset(ctx context.Context, downloadURL string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create download request: %w", err)
@@ -563,8 +567,11 @@ func (c *Client) DownloadAsset(ctx context.Context, downloadURL string) ([]byte,
 	}
 
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, resp.Body); err != nil {
+	if _, err := io.Copy(&buf, io.LimitReader(resp.Body, maxBytes+1)); err != nil {
 		return nil, fmt.Errorf("read download content: %w", err)
+	}
+	if int64(buf.Len()) > maxBytes {
+		return nil, fmt.Errorf("download exceeds %d byte limit", maxBytes)
 	}
 
 	return buf.Bytes(), nil
@@ -658,6 +665,9 @@ func isWolBinary(name string) bool {
 
 // BuildFromSource compiles WOL from source using the local Go toolchain at the specified tag.
 func BuildFromSource(ctx context.Context, repo, tag string) ([]byte, error) {
+	if runtime.GOOS == "darwin" {
+		return nil, errors.New("automatic source fallback is disabled on macOS to preserve network-permission packaging; download the matching release archive, or check out the release tag and run make install BINDIR=\"$HOME/.local/bin\"")
+	}
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		return nil, fmt.Errorf("go toolchain not found in PATH: %w", err)

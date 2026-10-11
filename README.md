@@ -28,7 +28,7 @@ Download the archive for your operating system and architecture from
 provided, extract it, and place the executable on PATH. See the release notes
 for the platforms actually verified for that version.
 
-To build the development version, install Go 1.26.6 or newer, clone this repo,
+To build the development version, install Go 1.26.9 or newer, clone this repo,
 and run:
 
 ```sh
@@ -69,6 +69,14 @@ wol update
 wol update --check
 wol version
 ```
+
+`wol update` verifies the downloaded archive against the release's `SHA256SUMS`
+(or its exact versioned legacy checksums file) before installing. Missing,
+malformed or mismatched checksums leave the existing executable unchanged.
+Older releases without a checksums file require manual installation after
+verification. These checksums detect corruption; they are not signed provenance.
+On macOS, a missing archive stops the update with instructions to use a release
+archive or `make install`, preserving the network-permission packaging.
 
 `wol wake --device NAME --verify` waits for the configured TCP service after
 sending. A successful packet send means the packet was delivered; it does not

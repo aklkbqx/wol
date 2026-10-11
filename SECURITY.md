@@ -17,7 +17,7 @@ its SQLite inventory, and configured SSH relay keys as administrative access.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for an undisclosed vulnerability. Use GitHub private vulnerability reporting when enabled for this repository.
-Otherwise request a private contact channel through the maintainer profile at
-https://github.com/aklkbqx before sharing technical details. Include the affected
+Do not open a public issue for an undisclosed vulnerability. Report privately at
+[GitHub private vulnerability reporting](https://github.com/aklkbqx/wol/security/advisories/new).
+Include the affected
 version, a minimal reproduction and impact; omit credentials and real inventories.

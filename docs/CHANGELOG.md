@@ -1,8 +1,13 @@
-# 0.4.13 — 2026-10-04
+# 0.4.13 — 2026-10-11
 
 - `wol doctor` warns on macOS when the executable lacks the embedded Local
   Network usage description (for example after `go install` or a
   source-build update), which otherwise makes status checks report unknown.
+- Updates verify release archive SHA256 checksums before extracting/installing;
+  missing or invalid checksums preserve the installed executable.
+- Automatic source fallback stops on macOS and explains packaging-aware install.
+- Restore the omitted Apache-2.0 section 5 text and enable private security reports.
+- Require Go 1.26.9 and prefer Go 1.27.2 for patched release builds.
 
 # 0.4.12 — 2026-09-21
 
