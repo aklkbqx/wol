@@ -147,3 +147,14 @@ func TestMacOSSourceFallbackPreservesPackaging(t *testing.T) {
 		t.Fatal("failed fallback replaced packaged executable")
 	}
 }
+
+func TestNonMacOSSourceFallbackRequiresGo(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS intentionally refuses automatic source builds")
+	}
+	t.Setenv("PATH", t.TempDir())
+	_, err := BuildFromSource(context.Background(), "aklkbqx/wol", "v0.4.13")
+	if err == nil || !strings.Contains(err.Error(), "go toolchain not found") {
+		t.Fatalf("got %v, want supported source-build path to require Go", err)
+	}
+}
