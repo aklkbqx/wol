@@ -313,6 +313,9 @@ func (c *Client) ExecuteUpdate(ctx context.Context, opts UpdateOptions) (*Update
 			return nil, err
 		}
 		release = rel
+		if c.publicKeyFile != "" && CleanVersion(release.Tag) != CleanVersion(opts.TargetVersion) {
+			return nil, fmt.Errorf("signed release does not match requested version %s", opts.TargetVersion)
+		}
 		cleanTarget := CleanVersion(release.Tag)
 		cleanCurrent := CleanVersion(c.CurrentVersion)
 		cmp := CompareVersions(cleanCurrent, cleanTarget)
@@ -633,6 +636,9 @@ func extractFromTarGz(content []byte, limits extractionLimits) ([]byte, error) {
 }
 
 func extractFromZip(content []byte, limits extractionLimits) ([]byte, error) {
+	if err := preflightZipDirectory(content, limits.entries); err != nil {
+		return nil, err
+	}
 	zr, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
 	if err != nil {
 		return nil, fmt.Errorf("create zip reader: %w", err)

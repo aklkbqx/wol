@@ -53,8 +53,12 @@ func TestSignedManifestUpdatePolicy(t *testing.T) {
 		missing, corrupt, changedManifest, wrongKey, invalidKey, missingKey, noArchive, checkOnly bool
 		signatureSize                                                                             int
 		releaseTag                                                                                string
+		targetVersion                                                                             string
+		currentVersion                                                                            string
 	}{
 		{name: "valid"},
+		{name: "valid requested version", targetVersion: "0.5.0"},
+		{name: "signed replay substitutes requested version", currentVersion: "0.6.0", targetVersion: "0.6.0", wantError: "requested version"},
 		{name: "replayed older manifest", releaseTag: "v0.6.0", wantError: "release version"},
 		{name: "missing signature", missing: true, wantError: "signature"},
 		{name: "corrupt signature", corrupt: true, wantError: "signature"},
@@ -91,7 +95,7 @@ func TestSignedManifestUpdatePolicy(t *testing.T) {
 			var server *httptest.Server
 			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
-				case "/repos/aklkbqx/wol/releases/latest":
+				case "/repos/aklkbqx/wol/releases/latest", "/repos/aklkbqx/wol/releases/tags/v0.5.0", "/repos/aklkbqx/wol/releases/tags/v0.6.0":
 					assets := []map[string]string{{"name": name, "browser_download_url": server.URL + "/archive"}, {"name": "SHA256SUMS", "browser_download_url": server.URL + "/manifest"}}
 					if !tc.missing {
 						assets = append(assets, map[string]string{"name": "SHA256SUMS.sig", "browser_download_url": server.URL + "/signature"})
@@ -130,8 +134,12 @@ func TestSignedManifestUpdatePolicy(t *testing.T) {
 			if err := os.WriteFile(target, []byte("original"), 0755); err != nil {
 				t.Fatal(err)
 			}
-			c := NewClient("0.4.14-dev", WithBaseAPIURL(server.URL), WithHTTPClient(server.Client()))
-			_, err = c.ExecuteUpdate(t.Context(), UpdateOptions{TargetFile: target, CheckOnly: tc.checkOnly})
+			current := tc.currentVersion
+			if current == "" {
+				current = "0.4.14-dev"
+			}
+			c := NewClient(current, WithBaseAPIURL(server.URL), WithHTTPClient(server.Client()))
+			_, err = c.ExecuteUpdate(t.Context(), UpdateOptions{TargetFile: target, CheckOnly: tc.checkOnly, TargetVersion: tc.targetVersion})
 			if tc.wantError == "" && err != nil {
 				t.Fatalf("update: %v", err)
 			}
