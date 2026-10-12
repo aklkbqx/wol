@@ -2,9 +2,13 @@ package main
 
 import (
 	"bytes"
+	"flag"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUsage(t *testing.T) {
@@ -55,6 +59,37 @@ func TestWakeFlagValidation(t *testing.T) {
 	code = runWake([]string{})
 	if code != 2 {
 		t.Errorf("expected exit code 2 for missing MAC arg, got %d", code)
+	}
+}
+
+func TestWakeAcceptsFlagsAfterMAC(t *testing.T) {
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := strconv.Itoa(listener.LocalAddr().(*net.UDPAddr).Port)
+	if code := runWake([]string{"02:00:00:00:00:01", "--destination", "127.0.0.1", "--port", port, "--repeat", "1"}); code != 0 {
+		t.Fatalf("wake with flags after the MAC exited %d, want 0", code)
+	}
+	if err := listener.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	packet := make([]byte, 256)
+	if n, _, err := listener.ReadFromUDP(packet); err != nil || n != 102 {
+		t.Fatalf("received %d bytes, %v; want one 102-byte magic packet on the requested port", n, err)
+	}
+}
+
+func TestParseInterspersedKeepsPositionalsAfterTerminator(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	count := flags.Int("n", 0, "")
+	positionals, err := parseInterspersed(flags, []string{"first", "-n", "2", "second", "--", "-literal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *count != 2 || strings.Join(positionals, ",") != "first,second,-literal" {
+		t.Fatalf("n=%d positionals=%q, want n=2 and first,second,-literal", *count, positionals)
 	}
 }
 
