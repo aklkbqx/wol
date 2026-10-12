@@ -1,3 +1,12 @@
+# 0.4.15 — 2026-10-12
+
+- `wol wake` accepts flags after the MAC address (`wol wake MAC --destination X`);
+  arguments after `--` stay positional (#11).
+- `wol wake --verify` returns within its timeout instead of up to a second
+  later (#12).
+- On Windows, the `wol.exe.old` left by a self-update is removed the next time
+  WOL starts (#10).
+
 # 0.4.14 — 2026-10-12
 
 - Batch wakes no longer report sent machines as failed when workers record

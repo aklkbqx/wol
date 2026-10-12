@@ -1,7 +1,7 @@
 # Release manifest signatures
 
 Development builds support optional Ed25519 verification. No production trust
-key has been chosen and releases through v0.4.14 are unsigned. Setting the
+key has been chosen and releases through v0.4.15 are unsigned. Setting the
 public-key option will therefore refuse installation of those releases.
 Ordinary updates still verify checksums when this option is unset.
 
