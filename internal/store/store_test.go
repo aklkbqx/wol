@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -408,5 +410,59 @@ func TestDeleteRemoteProfileAndOlderImports(t *testing.T) {
 				t.Fatalf("second delete = %v, want ErrNotFound", err)
 			}
 		})
+	}
+}
+
+// Batch wake workers finish their sends at nearly the same instant. Every one
+// of those attempts must be stored, otherwise a sent wake is reported failed.
+func TestRecordWakeAttemptKeepsSimultaneousAttempts(t *testing.T) {
+	repository, err := Open(filepath.Join(t.TempDir(), "attempts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	const workers = 32
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, err := repository.RecordWakeAttempt(t.Context(), WakeAttempt{TargetType: "device", TargetID: fmt.Sprint(i), TargetName: fmt.Sprint(i), MACAddress: "02:00:00:00:00:01", Destination: "192.0.2.255", Port: 9, PacketStatus: "sent", VerificationStatus: "not_requested", Packets: 3})
+			errs <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("simultaneous wake attempt was not recorded: %v", err)
+		}
+	}
+	attempts, err := repository.ListWakeAttempts(t.Context(), workers*2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attempts) != workers {
+		t.Fatalf("stored %d of %d simultaneous attempts", len(attempts), workers)
+	}
+}
+
+// Clock resolution is only a microsecond on macOS and coarser on some Windows
+// hosts, so IDs generated back to back must not depend on the clock alone.
+func TestNewIDIsUniqueBackToBack(t *testing.T) {
+	seen := make(map[string]bool, 10000)
+	for i := 0; i < 10000; i++ {
+		id := newID("wake")
+		if !strings.HasPrefix(id, "wake_") {
+			t.Fatalf("id %q lost its prefix", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate id %q after %d ids", id, i)
+		}
+		seen[id] = true
 	}
 }
