@@ -959,18 +959,6 @@ func validateImportedDevice(item Device) error {
 	return nil
 }
 
-func (s *Store) upsertSite(ctx context.Context, item Site) (Site, error) {
-	return s.upsertSiteOn(ctx, s.db, item)
-}
-
-func (s *Store) upsertDevice(ctx context.Context, item Device) (Device, error) {
-	return s.upsertDeviceOn(ctx, s.db, item)
-}
-
-func (s *Store) upsertGroup(ctx context.Context, item Group) error {
-	return s.upsertGroupOn(ctx, s.db, item)
-}
-
 func (s *Store) upsertSiteOn(ctx context.Context, q queryable, item Site) (Site, error) {
 	normalized, validationErr := normalizeSite(item)
 	if validationErr != nil {

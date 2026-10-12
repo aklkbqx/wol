@@ -56,8 +56,7 @@ func Doctor(ctx context.Context, runners ...Runner) (DoctorReport, error) {
 	}
 	report.DockerDaemon = true
 	for _, image := range []string{GuacamoleImage, GuacdImage} {
-		result, err = runner.Run(ctx, Command{Name: "docker", Args: []string{"image", "inspect", image}})
-		if err != nil {
+		if _, err := runner.Run(ctx, Command{Name: "docker", Args: []string{"image", "inspect", image}}); err != nil {
 			report.Problems = append(report.Problems, ImageLabel(image)+" is not installed; run local remote setup")
 			continue
 		}
@@ -162,7 +161,7 @@ func parsePublishedLoopback(output string) (string, error) {
 			return "http://127.0.0.1:" + port, nil
 		}
 	}
-	return "", fmt.Errorf("Docker did not publish Guacamole on 127.0.0.1: %q", strings.TrimSpace(output))
+	return "", fmt.Errorf("no Guacamole port published by Docker on 127.0.0.1: %q", strings.TrimSpace(output))
 }
 
 func (d *dockerRuntime) close(ctx context.Context) error {

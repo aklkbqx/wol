@@ -216,14 +216,13 @@ type brokerHandler struct {
 }
 
 func newBroker(expectedHost, oneTimeToken, cookieToken, formToken string, cfg Config, key []byte, upstream *url.URL, disconnect func()) http.Handler {
-	proxy := httputil.NewSingleHostReverseProxy(upstream)
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Host = upstream.Host
-		req.Header.Set("X-Forwarded-Host", expectedHost)
-		req.Header.Set("X-Forwarded-Proto", "http")
-	}
+	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		// Rewrite drops client-supplied X-Forwarded-* headers before this runs.
+		r.SetURL(upstream)
+		r.SetXForwarded()
+		r.Out.Header.Set("X-Forwarded-Host", expectedHost)
+		r.Out.Header.Set("X-Forwarded-Proto", "http")
+	}}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
 		http.Error(w, "Remote engine is still starting. Please retry shortly.", http.StatusBadGateway)
 	}
@@ -423,19 +422,24 @@ func (b *brokerHandler) connect(w http.ResponseWriter, r *http.Request) {
 
 func validateCredentials(protocol string, credentials Credentials) error {
 	if len(credentials.Username) > 128 || strings.ContainsAny(credentials.Username, "\r\n\x00") {
-		return errors.New("Username is invalid.")
+		return signInError("Username is invalid.")
 	}
 	if len(credentials.Domain) > 128 || strings.ContainsAny(credentials.Domain, "\r\n\x00") {
-		return errors.New("Domain is invalid.")
+		return signInError("Domain is invalid.")
 	}
 	if len(credentials.Password) > 4096 || strings.ContainsRune(credentials.Password, '\x00') {
-		return errors.New("Password is invalid.")
+		return signInError("Password is invalid.")
 	}
 	if protocol == "ssh" && credentials.Username == "" {
-		return errors.New("SSH requires a username.")
+		return signInError("SSH requires a username.")
 	}
 	return nil
 }
+
+// signInError is a sentence shown as-is on the local sign-in page.
+type signInError string
+
+func (e signInError) Error() string { return string(e) }
 
 func (b *brokerHandler) remote(w http.ResponseWriter, r *http.Request) {
 	b.mu.Lock()

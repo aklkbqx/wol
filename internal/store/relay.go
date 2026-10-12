@@ -73,10 +73,6 @@ func (s *Store) CreateWakeRelay(ctx context.Context, item WakeRelay) (WakeRelay,
 	return item, nil
 }
 
-func (s *Store) upsertWakeRelay(ctx context.Context, item WakeRelay) (WakeRelay, error) {
-	return s.upsertWakeRelayOn(ctx, s.db, item)
-}
-
 func (s *Store) upsertWakeRelayOn(ctx context.Context, q queryable, item WakeRelay) (WakeRelay, error) {
 	var existingID string
 	err := q.QueryRowContext(ctx, `SELECT id FROM wake_relays WHERE name = ?`, strings.TrimSpace(item.Name)).Scan(&existingID)

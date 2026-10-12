@@ -1,3 +1,10 @@
+# Unreleased
+
+- The browser-remote proxy sends Guacamole only its own `X-Forwarded-*`
+  headers; values supplied by the browser are dropped (#9).
+- `make verify` runs staticcheck again; unused code and error-string issues it
+  reported are fixed (#9).
+
 # 0.4.15 — 2026-10-12
 
 - `wol wake` accepts flags after the MAC address (`wol wake MAC --destination X`);

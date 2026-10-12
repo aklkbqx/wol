@@ -47,7 +47,7 @@ func NewClient(host string, port int, username, password, pinnedSHA256 string) *
 		tlsConfig.InsecureSkipVerify = true
 		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
 			if len(state.PeerCertificates) == 0 {
-				return errors.New("Sunshine presented no certificate")
+				return errors.New("no certificate presented by Sunshine")
 			}
 			if presented := certificateFingerprint(state.PeerCertificates[0]); presented != pinnedSHA256 {
 				return &UntrustedCertificateError{Fingerprint: presented}
