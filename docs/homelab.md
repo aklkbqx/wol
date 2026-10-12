@@ -81,7 +81,10 @@ only a live online result is successful. For wake, success means packet sent.
 ## Backup, upgrade and uninstall
 
 Use `wol export --output inventory.json` before upgrading. Imports merge by
-identity; use a fresh `--db` path to inspect a backup before merging. Exports
+identity; use a fresh `--db` path to inspect a backup before merging. Imports
+are all-or-nothing: an invalid machine field, or a group, machine or site that
+references a route or machine missing from the file, rejects the whole file and
+names the entry. Exports
 include connection settings but exclude passwords and transient session tokens.
 Keep them private. Portable exports do not preserve activity history.
 
