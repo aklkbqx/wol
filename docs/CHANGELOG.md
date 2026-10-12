@@ -1,8 +1,9 @@
-# Unreleased
+# 0.4.17 — 2026-10-13
 
 - `wol shutdown` keeps flags that follow the machine name when other flags come
   before it. Before, `wol shutdown --db FILE pc --cancel` dropped `--cancel`
   and shut the machine down. Two machine names are now a usage error (#16).
+- Tests cover `wol export`, `wol shutdown status` and `wol shutdown cancel` (#17).
 
 # 0.4.16 — 2026-10-13
 
