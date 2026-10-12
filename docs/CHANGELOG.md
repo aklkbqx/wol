@@ -1,5 +1,9 @@
 # Unreleased
 
+- Releases are signed: `SHA256SUMS.sig` is an Ed25519 signature over the
+  manifest, checkable with `WOL_UPDATE_PUBLIC_KEY` and the public key in
+  `docs/wol-release-public.pem` (#14).
+- `wol-release-sign fingerprint` prints a public key's SHA-256 fingerprint.
 - The browser-remote proxy sends Guacamole only its own `X-Forwarded-*`
   headers; values supplied by the browser are dropped (#9).
 - `make verify` runs staticcheck again; unused code and error-string issues it

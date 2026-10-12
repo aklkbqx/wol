@@ -5,7 +5,9 @@ package releasesign
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -72,6 +74,17 @@ func ParsePublicKey(data []byte) (ed25519.PublicKey, error) {
 		return nil, errors.New("public key must be Ed25519")
 	}
 	return key, nil
+}
+
+// Fingerprint is the lowercase hex SHA-256 of the key's PKIX DER encoding, the
+// same value as `openssl pkey -pubin -outform DER | sha256sum`.
+func Fingerprint(key ed25519.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(key)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func ParsePrivateKey(data []byte) (ed25519.PrivateKey, error) {

@@ -1,16 +1,57 @@
 # Release manifest signatures
 
-Development builds support optional Ed25519 verification. No production trust
-key has been chosen and releases through v0.4.15 are unsigned. Setting the
-public-key option will therefore refuse installation of those releases.
-Ordinary updates still verify checksums when this option is unset.
+Releases from v0.4.16 ship `SHA256SUMS.sig`, a detached Ed25519 signature over
+the exact bytes of `SHA256SUMS`. Releases through v0.4.15 are unsigned, so
+setting the public-key option refuses to install them. Ordinary updates still
+verify checksums when this option is unset.
+
+## Release key
+
+| | |
+| --- | --- |
+| Algorithm | Ed25519 (PKIX PEM public key, PKCS8 PEM private key) |
+| Public key | [`docs/wol-release-public.pem`](wol-release-public.pem) |
+| Fingerprint | `ac3979581b0ada7f53a4309a2cfefa983283f62cf914f87b5aa0e8619607f1be` |
+| Valid from | v0.4.16 |
+
+The fingerprint is the SHA-256 of the public key's DER encoding. Check it with
+either command:
+
+```sh
+go run ./cmd/wol-release-sign fingerprint --key docs/wol-release-public.pem
+openssl pkey -pubin -in docs/wol-release-public.pem -outform DER | shasum -a 256
+```
+
+The fingerprint is also printed in this file, the README and every signed
+release's notes. Compare at least two of these, for example a tagged copy of
+this file and the release notes, before you trust the key. The private key is
+dedicated to WOL, lives only on the maintainer's machine outside the checkout,
+with an offline backup, and never in this repository, release archives or
+issues.
+
+### Rotation and compromise
+
+A planned rotation lands in a release signed by the current key: that release
+adds the new public key, changes the fingerprint here and in the README, and
+says so in its notes. The next release is signed by the new key only, so
+`WOL_UPDATE_PUBLIC_KEY` users must review and replace their trusted file once.
+If the key is lost or exposed, the maintainer stops signing with it, opens an
+issue naming the affected fingerprint and publishes the replacement through the
+same channels. Never accept a replacement key that only appears in update
+metadata or beside the archives.
 
 ## Maintainer workflow
 
-Use an existing Ed25519 private key in unencrypted PKCS8 PEM (`PRIVATE KEY`) and
-its corresponding PKIX PEM public key (`PUBLIC KEY`). Keep the private key
-outside this checkout and outside release archives. This tool does not create
-keys or establish a trusted publisher identity.
+`sh scripts/release-check.sh` signs and verifies the manifest automatically. It
+reads the private key from `WOL_RELEASE_SIGNING_KEY` (default
+`~/.config/wol-release/wol-release-private.pem`) and checks the signature
+against `docs/wol-release-public.pem`. `WOL_RELEASE_UNSIGNED=1` skips signing for
+a dry run; never publish its output.
+
+The manual commands below take an Ed25519 private key in unencrypted PKCS8 PEM
+(`PRIVATE KEY`) and its PKIX PEM public key (`PUBLIC KEY`), for example from
+`openssl genpkey -algorithm ed25519`. Keep the private key outside this
+checkout and outside release archives.
 
 Build the normal versioned archives and `SHA256SUMS` first, then sign the final
 manifest bytes locally:
@@ -39,11 +80,10 @@ must still match its checksum.
 
 ## Consumer trust
 
-Obtain the public key through a separately authenticated channel and confirm
-its identity with the maintainer before trusting it. A key downloaded beside
-the archives is insufficient to establish trust. Use a key dedicated to WOL.
-The current tooling does not choose a key, distribute a trust root or automate
-key rotation.
+Obtain the public key from this repository, not from the release assets, and
+check its fingerprint against a second source as described above. A key
+downloaded beside the archives is insufficient to establish trust. WOL does not
+distribute a trust root or rotate keys automatically.
 
 ```sh
 WOL_UPDATE_PUBLIC_KEY=/trusted/location/wol-release-public.pem wol update

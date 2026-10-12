@@ -42,19 +42,22 @@ macOS builds are ad-hoc signed, not notarized.
 
 1. Review changes, document known limitations, run make verify and back up data.
 2. Change internal/buildinfo/version.go to the real release version without
-   -dev, commit, then run sh scripts/release-check.sh.
+   -dev, commit, then run sh scripts/release-check.sh. It signs SHA256SUMS
+   with the release key (WOL_RELEASE_SIGNING_KEY, default
+   ~/.config/wol-release/wol-release-private.pem) and verifies the signature
+   against docs/wol-release-public.pem.
 3. Test all artifacts on their intended systems. Record results in release
    notes, including tests that could not be performed.
 4. Build and install the production binary locally with make build and
    install -m 755 dist/wol ~/.local/bin/wol.
 5. Create the matching git tag and publish the GitHub release with every
-   supported platform archive and SHA256SUMS.
+   supported platform archive, SHA256SUMS and SHA256SUMS.sig.
 6. Subsequent edits bump to the next -dev version and reinstall for testing.
 
 Release scripts run locally and do not publish or push automatically.
-Optional detached manifest signing and trusted-key update verification are
-described in [release signing](release-signing.md). No production trust key
-has been configured; releases through v0.4.15 remain unsigned.
+Manifest signing, the release key and trusted-key update verification are
+described in [release signing](release-signing.md). Releases through v0.4.15
+are unsigned; v0.4.16 is the first signed release.
 No GitHub Actions or third-party hosting configuration is used.
 
 ## Public beta acceptance

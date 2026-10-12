@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"os"
 	"path/filepath"
@@ -68,5 +70,39 @@ func TestSigningWorkflow(t *testing.T) {
 	}
 	if bytes.Contains(out.Bytes(), privateDER) {
 		t.Fatal("private key printed")
+	}
+}
+
+func TestFingerprintPrintsSHA256OfPublicKeyDER(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicDER, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	publicPath, privatePath := filepath.Join(dir, "public.pem"), filepath.Join(dir, "private.pem")
+	if err := os.WriteFile(publicPath, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(privatePath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"fingerprint", "--key", publicPath}, &out); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(publicDER)
+	if got, want := out.String(), hex.EncodeToString(sum[:])+"\n"; got != want {
+		t.Fatalf("fingerprint output = %q, want %q", got, want)
+	}
+	if err := run([]string{"fingerprint", "--key", privatePath}, &out); err == nil {
+		t.Fatal("fingerprint accepted a private key")
 	}
 }
