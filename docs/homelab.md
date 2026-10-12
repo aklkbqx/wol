@@ -89,7 +89,7 @@ include connection settings but exclude passwords and transient session tokens.
 Keep them private. Portable exports do not preserve activity history.
 
 Stop WOL before making a filesystem backup of its data directory. Keep the
-SQLite database and any WAL/SHM files together. Versions 0.4.12 through 0.4.16 share
+SQLite database and any WAL/SHM files together. Versions 0.4.12 through 0.4.17 share
 one schema: each opens, reads and writes a database created by any other, in
 both directions. A future schema change may not open in an older binary, so
 retain the old data backup when rolling back.
