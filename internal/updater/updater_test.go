@@ -318,6 +318,56 @@ func TestReplaceExecutable(t *testing.T) {
 	}
 }
 
+func TestRemoveStaleExecutableDeletesOnlyTheUpdateLeftover(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	executable := write("wol.exe", "current")
+	write("wol.exe.old", "previous")
+	write("other.exe.old", "unrelated")
+
+	RemoveStaleExecutable(executable)
+
+	if _, err := os.Stat(filepath.Join(dir, "wol.exe.old")); !os.IsNotExist(err) {
+		t.Fatalf("wol.exe.old still present after cleanup: %v", err)
+	}
+	for _, kept := range []string{"wol.exe", "other.exe.old"} {
+		if _, err := os.Stat(filepath.Join(dir, kept)); err != nil {
+			t.Fatalf("%s was removed: %v", kept, err)
+		}
+	}
+	RemoveStaleExecutable(executable) // nothing left to remove; must not panic
+}
+
+func TestRemoveStaleExecutableFollowsSymlinkLikeReplace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need extra privileges on Windows")
+	}
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real", "wol")
+	if err := os.MkdirAll(filepath.Dir(real), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{real, real + ".old"} {
+		if err := os.WriteFile(path, []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "wol")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	RemoveStaleExecutable(link)
+	if _, err := os.Stat(real + ".old"); !os.IsNotExist(err) {
+		t.Fatalf("leftover next to the symlink target was not removed: %v", err)
+	}
+}
+
 func TestExecuteUpdateWithAsset(t *testing.T) {
 	// Create mock binary tar.gz asset
 	var buf bytes.Buffer

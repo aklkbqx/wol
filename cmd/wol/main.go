@@ -7,11 +7,13 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/aklkbqx/wol/internal/buildinfo"
 	"github.com/aklkbqx/wol/internal/store"
+	"github.com/aklkbqx/wol/internal/updater"
 	"github.com/aklkbqx/wol/internal/wake"
 	"github.com/aklkbqx/wol/internal/wol"
 	"golang.org/x/term"
@@ -23,6 +25,11 @@ var (
 )
 
 func main() {
+	if runtime.GOOS == "windows" {
+		if executable, err := os.Executable(); err == nil {
+			updater.RemoveStaleExecutable(executable)
+		}
+	}
 	if len(os.Args) < 2 {
 		if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 			usage()
