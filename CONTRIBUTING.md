@@ -16,4 +16,4 @@ make verify
   real machine inventories, or private network details.
 - Keep external commands non-interactive and validate every dynamic argument.
 
-Read [Development](docs/development.md) for architecture, migrations and local release checks, and [Community conduct](CODE_OF_CONDUCT.md). Describe unverified platforms in your PR. No GitHub Actions workflows are used.
+Pick up or report work through issues as described in [GitHub workflow](docs/github-workflow.md). Read [Development](docs/development.md) for architecture, migrations and local release checks, and [Community conduct](CODE_OF_CONDUCT.md). Describe unverified platforms in your PR. No GitHub Actions workflows are used.
