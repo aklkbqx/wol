@@ -31,7 +31,11 @@ func WaitForTCP(ctx context.Context, host string, port int, timeout time.Duratio
 			connection.Close()
 			return nil
 		}
-		timer := time.NewTimer(1 * time.Second)
+		retryWait := time.Second
+		if remaining := time.Until(deadline); remaining < retryWait {
+			retryWait = max(remaining, 0)
+		}
+		timer := time.NewTimer(retryWait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

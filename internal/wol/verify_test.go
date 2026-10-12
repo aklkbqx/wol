@@ -60,6 +60,23 @@ func TestWaitForTCPStopsAtItsTimeout(t *testing.T) {
 	}
 }
 
+func TestWaitForTCPReturnsCloseToItsTimeout(t *testing.T) {
+	reserved, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := reserved.Addr().(*net.TCPAddr).Port
+	reserved.Close()
+	const timeout = 1500 * time.Millisecond
+	start := time.Now()
+	if err := waitForTCPWithin(t, 5*time.Second, context.Background(), "127.0.0.1", port, timeout); err == nil {
+		t.Fatal("WaitForTCP reported a closed port as reachable")
+	}
+	if elapsed := time.Since(start); elapsed > timeout+400*time.Millisecond {
+		t.Fatalf("WaitForTCP returned after %s, more than 400ms past its %s timeout", elapsed.Round(time.Millisecond), timeout)
+	}
+}
+
 func TestWaitForTCPHonorsCancellation(t *testing.T) {
 	reserved, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
