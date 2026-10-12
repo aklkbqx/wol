@@ -77,7 +77,7 @@ Older releases without a checksums file require manual installation after
 verification. These checksums detect corruption. Development builds can also
 require an Ed25519 signature using `WOL_UPDATE_PUBLIC_KEY=/trusted/key.pem`;
 see [release signing and trust setup](docs/release-signing.md). No production
-key has been chosen, and v0.4.13 is unsigned.
+key has been chosen, and releases through v0.4.14 are unsigned.
 On macOS, a missing archive stops the update with instructions to use a release
 archive or `make install`, preserving the network-permission packaging.
 

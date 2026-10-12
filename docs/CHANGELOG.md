@@ -1,3 +1,17 @@
+# 0.4.14 — 2026-10-12
+
+- Batch wakes no longer report sent machines as failed when workers record
+  attempts at the same instant; stored IDs gain a random suffix.
+- Imports reject invalid MAC, IPv4 and port values and references to machines
+  or relays missing from the file, instead of storing dangling entries.
+- Sunshine pairing verifies the certificate or a pinned `--tls-fingerprint`
+  before sending credentials, and usage output no longer prints `SUNSHINE_PASS`.
+- Updates can require an Ed25519-signed checksum manifest via
+  `WOL_UPDATE_PUBLIC_KEY`; archives have size and entry limits before extraction.
+- Prerelease versions compare numerically (`beta.10` is newer than `beta.2`);
+  the latest-release redirect fallback uses the configured HTTP client.
+- Replaced executables are flushed to disk before the atomic rename.
+
 # 0.4.13 — 2026-10-11
 
 - `wol doctor` warns on macOS when the executable lacks the embedded Local

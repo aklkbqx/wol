@@ -49,7 +49,7 @@ macOS builds are ad-hoc signed, not notarized.
 Release scripts run locally and do not publish or push automatically.
 Optional detached manifest signing and trusted-key update verification are
 described in [release signing](release-signing.md). No production trust key
-has been configured; v0.4.13 remains unsigned.
+has been configured; releases through v0.4.14 remain unsigned.
 No GitHub Actions or third-party hosting configuration is used.
 
 ## Public beta acceptance
