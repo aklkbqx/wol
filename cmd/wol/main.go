@@ -87,16 +87,17 @@ func runWake(arguments []string) int {
 	verify := flags.Bool("verify", false, "wait for the stored device TCP verification port after waking")
 	verifyPort := flags.Int("verify-port", 0, "override stored device verification port")
 	force := flags.Bool("force", false, "wake a stored device even when it is disabled")
-	if err := flags.Parse(arguments); err != nil {
+	positionals, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() > 1 || (flags.NArg() == 0 && strings.TrimSpace(*deviceTarget) == "") {
+	if len(positionals) > 1 || (len(positionals) == 0 && strings.TrimSpace(*deviceTarget) == "") {
 		fmt.Fprintln(os.Stderr, "wake requires one MAC address or --device name/id")
 		return 2
 	}
 	target := strings.TrimSpace(*deviceTarget)
 	if target == "" {
-		target = flags.Arg(0)
+		target = positionals[0]
 	}
 	mac, parseErr := wol.ParseMAC(target)
 

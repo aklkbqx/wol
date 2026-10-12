@@ -35,6 +35,27 @@ func flagSet(name string) *flag.FlagSet {
 	return flag.NewFlagSet(name, flag.ContinueOnError)
 }
 
+// parseInterspersed parses flags that appear before or after positional
+// arguments; the standard parser stops at the first positional. Arguments after
+// a "--" terminator are positional.
+func parseInterspersed(flags *flag.FlagSet, arguments []string) ([]string, error) {
+	var positionals []string
+	for {
+		if err := flags.Parse(arguments); err != nil {
+			return nil, err
+		}
+		rest := flags.Args()
+		if len(rest) == 0 {
+			return positionals, nil
+		}
+		if consumed := len(arguments) - len(rest); consumed > 0 && arguments[consumed-1] == "--" {
+			return append(positionals, rest...), nil
+		}
+		positionals = append(positionals, rest[0])
+		arguments = rest[1:]
+	}
+}
+
 func findStoredDevice(dataStore *store.Store, target string) (store.Device, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
