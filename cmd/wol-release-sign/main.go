@@ -18,8 +18,11 @@ func main() {
 }
 
 func run(args []string, out io.Writer) error {
+	if len(args) > 0 && args[0] == "fingerprint" {
+		return fingerprint(args[1:], out)
+	}
 	if len(args) == 0 || (args[0] != "sign" && args[0] != "verify") {
-		return fmt.Errorf("usage: wol-release-sign sign|verify --key PEM --manifest SHA256SUMS --output FILE|--signature FILE")
+		return fmt.Errorf("usage: wol-release-sign sign|verify --key PEM --manifest SHA256SUMS --output FILE|--signature FILE\n       wol-release-sign fingerprint --key PUBLIC_PEM")
 	}
 	flags := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -85,5 +88,31 @@ func run(args []string, out io.Writer) error {
 		return fmt.Errorf("write signature: %w", writeErr)
 	}
 	_, err = fmt.Fprintln(out, "Detached manifest signature written.")
+	return err
+}
+
+func fingerprint(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("fingerprint", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	keyPath := flags.String("key", "", "Ed25519 PKIX PEM public key file")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || *keyPath == "" {
+		return fmt.Errorf("a public key path is required")
+	}
+	keyBytes, err := releasesign.ReadFile(*keyPath, releasesign.MaxKeyBytes)
+	if err != nil {
+		return fmt.Errorf("read key: %w", err)
+	}
+	key, err := releasesign.ParsePublicKey(keyBytes)
+	if err != nil {
+		return err
+	}
+	sum, err := releasesign.Fingerprint(key)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, sum)
 	return err
 }

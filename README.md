@@ -91,10 +91,13 @@ wol version
 (or its exact versioned legacy checksums file) before installing. Missing,
 malformed or mismatched checksums leave the existing executable unchanged.
 Older releases without a checksums file require manual installation after
-verification. These checksums detect corruption. Development builds can also
-require an Ed25519 signature using `WOL_UPDATE_PUBLIC_KEY=/trusted/key.pem`;
-see [release signing and trust setup](docs/release-signing.md). No production
-key has been chosen, and releases through v0.4.15 are unsigned.
+verification. These checksums detect corruption. Releases from v0.4.16 also
+ship `SHA256SUMS.sig`, an Ed25519 signature over the manifest. To require it,
+save [the release public key](docs/wol-release-public.pem), check that its
+fingerprint is `ac3979581b0ada7f53a4309a2cfefa983283f62cf914f87b5aa0e8619607f1be`
+and run updates with `WOL_UPDATE_PUBLIC_KEY=/path/to/wol-release-public.pem`;
+see [release signing and trust setup](docs/release-signing.md). Releases through
+v0.4.15 are unsigned, so this option cannot install them.
 On macOS, a missing archive stops the update with instructions to use a release
 archive or `make install`, preserving the network-permission packaging.
 
