@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/aklkbqx/wol/internal/wol"
 	_ "modernc.org/sqlite"
 )
 
@@ -866,8 +868,15 @@ func (s *Store) Import(ctx context.Context, data ExportData) error {
 
 	deviceIDs := make(map[string]string, len(data.Devices))
 	for _, device := range data.Devices {
+		if err := validateImportedDevice(device); err != nil {
+			return fmt.Errorf("import machine %q: %w", device.Name, err)
+		}
 		originalID := device.ID
-		if mapped, ok := relayIDs[device.WakeRelayID]; ok {
+		if device.WakeRelayID != "" {
+			mapped, ok := relayIDs[device.WakeRelayID]
+			if !ok {
+				return fmt.Errorf("machine %q references unknown relay %q", device.Name, device.WakeRelayID)
+			}
 			device.WakeRelayID = mapped
 		}
 		if mapped, ok := siteIDs[device.SiteID]; ok {
@@ -886,9 +895,11 @@ func (s *Store) Import(ctx context.Context, data ExportData) error {
 
 	for _, group := range data.Groups {
 		for index, oldID := range group.DeviceIDs {
-			if mapped, ok := deviceIDs[oldID]; ok {
-				group.DeviceIDs[index] = mapped
+			mapped, ok := deviceIDs[oldID]
+			if !ok {
+				return fmt.Errorf("group %q references unknown machine %q", group.Name, oldID)
 			}
+			group.DeviceIDs[index] = mapped
 		}
 		if err := s.upsertGroupOn(ctx, tx, group); err != nil {
 			return err
@@ -920,6 +931,32 @@ func (s *Store) Import(ctx context.Context, data ExportData) error {
 	}
 
 	return tx.Commit()
+}
+
+// validateImportedDevice applies the machine form's field rules to inventory
+// files, which reach the database without passing through that form.
+func validateImportedDevice(item Device) error {
+	if strings.TrimSpace(item.Name) == "" {
+		return errors.New("name is required")
+	}
+	if _, err := wol.ParseMAC(item.MACAddress); err != nil {
+		return fmt.Errorf("MAC address %q is not a valid unicast MAC", item.MACAddress)
+	}
+	for _, field := range []struct{ label, value string }{{"IP address", item.IPAddress}, {"broadcast address", item.BroadcastAddress}} {
+		value := strings.TrimSpace(field.value)
+		if value != "" && net.ParseIP(value).To4() == nil {
+			return fmt.Errorf("%s %q is not an IPv4 address", field.label, value)
+		}
+	}
+	for _, field := range []struct {
+		label string
+		value int
+	}{{"UDP port", item.Port}, {"verify port", item.VerifyPort}} {
+		if field.value < 0 || field.value > 65535 {
+			return fmt.Errorf("%s %d is outside 0-65535", field.label, field.value)
+		}
+	}
+	return nil
 }
 
 func (s *Store) upsertSite(ctx context.Context, item Site) (Site, error) {

@@ -466,3 +466,80 @@ func TestNewIDIsUniqueBackToBack(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestImportRejectsInvalidOrDanglingInventory(t *testing.T) {
+	device := func(edit func(*Device)) Device {
+		item := Device{ID: "old-device", Name: "pc-1", MACAddress: "02:00:00:00:00:61", Enabled: true}
+		edit(&item)
+		return item
+	}
+	cases := []struct {
+		name string
+		data ExportData
+		want string
+	}{
+		{"group member is not in the file", ExportData{Devices: []Device{device(func(*Device) {})}, Groups: []Group{{Name: "lab", DeviceIDs: []string{"old-device", "ghost-device"}}}}, "ghost-device"},
+		{"device relay is not in the file", ExportData{Devices: []Device{device(func(d *Device) { d.WakeRelayID = "missing-relay" })}}, "missing-relay"},
+		{"blank name", ExportData{Devices: []Device{device(func(d *Device) { d.Name = "  " })}}, "name"},
+		{"malformed MAC", ExportData{Devices: []Device{device(func(d *Device) { d.MACAddress = "not-a-mac" })}}, "mac"},
+		{"multicast MAC", ExportData{Devices: []Device{device(func(d *Device) { d.MACAddress = "01:00:5e:00:00:01" })}}, "mac"},
+		{"out-of-range IPv4", ExportData{Devices: []Device{device(func(d *Device) { d.IPAddress = "999.1.1.1" })}}, "999.1.1.1"},
+		{"IPv6 broadcast", ExportData{Devices: []Device{device(func(d *Device) { d.BroadcastAddress = "ff02::1" })}}, "ff02::1"},
+		{"UDP port above range", ExportData{Devices: []Device{device(func(d *Device) { d.Port = 99999 })}}, "99999"},
+		{"negative verify port", ExportData{Devices: []Device{device(func(d *Device) { d.VerifyPort = -1 })}}, "-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repository, err := Open(filepath.Join(t.TempDir(), "wol.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer repository.Close()
+			tc.data.Version = currentExportVersion
+			err = repository.Import(t.Context(), tc.data)
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(tc.want)) {
+				t.Fatalf("Import error = %v, want rejection mentioning %q", err, tc.want)
+			}
+			devices, err := repository.ListDevices(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(devices) != 0 {
+				t.Fatalf("rejected import committed devices: %+v", devices)
+			}
+		})
+	}
+}
+
+func TestImportRemapsGroupMembers(t *testing.T) {
+	repository, err := Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	data := ExportData{Version: currentExportVersion,
+		Devices: []Device{
+			{ID: "old-a", Name: "pc-a", MACAddress: "02:00:00:00:00:71", IPAddress: "192.168.50.71", Enabled: true},
+			{ID: "old-b", Name: "pc-b", MACAddress: "02:00:00:00:00:72", Enabled: true},
+		},
+		Groups: []Group{{ID: "old-group", Name: "lab", DeviceIDs: []string{"old-b", "old-a"}}},
+	}
+	if err := repository.Import(t.Context(), data); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := repository.ListDevices(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]string{}
+	for _, item := range devices {
+		ids[item.Name] = item.ID
+	}
+	groups, err := repository.ListGroups(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 1 || len(groups[0].DeviceIDs) != 2 || groups[0].DeviceIDs[0] != ids["pc-b"] || groups[0].DeviceIDs[1] != ids["pc-a"] {
+		t.Fatalf("group members were not remapped in order: groups=%+v devices=%+v", groups, devices)
+	}
+}
