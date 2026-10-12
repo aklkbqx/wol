@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1046,7 +1047,11 @@ func (s *Store) upsertGroupOn(ctx context.Context, q queryable, item Group) erro
 var ErrNotFound = errors.New("not found")
 
 func newID(prefix string) string {
-	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
+	// The timestamp keeps IDs readable; the random suffix keeps them unique
+	// when concurrent batch workers read the same coarse clock value.
+	var suffix [8]byte
+	_, _ = rand.Read(suffix[:])
+	return fmt.Sprintf("%s_%d_%x", prefix, time.Now().UnixNano(), suffix)
 }
 
 func boolInt(value bool) int {
