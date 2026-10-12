@@ -73,7 +73,6 @@ type probeResultMsg struct {
 
 type probeBatchMsg struct {
 	requestID uint64
-	kind      loadingKind
 	statuses  map[string]string
 	methods   map[string]string
 	summary   presence.Summary
@@ -910,14 +909,6 @@ func (m *WakeModel) brandMark() string {
 		return m.theme.title().Render("wol")
 	}
 	return m.theme.cyan().Render("⚡ wol command center")
-}
-
-func (m *WakeModel) compactBrand() string {
-	mark := m.theme.title().Render("wol")
-	if version := m.versionMark(); version != "" {
-		return mark + "  " + version
-	}
-	return mark
 }
 
 func (m *WakeModel) View() string {

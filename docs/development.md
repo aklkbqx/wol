@@ -9,6 +9,11 @@ make verify
 make install BINDIR="$HOME/.local/bin"
 ```
 
+`make verify` runs the race tests, `go vet`, staticcheck, a native build and
+`git diff --check`. The staticcheck version is pinned in `scripts/verify.sh`
+(override with `STATICCHECK_VERSION`); the first run downloads it into the Go
+module cache.
+
 Architecture: CLI/TUI call store, presence, wake and remote services. The fleet
 package coordinates independent machine jobs with global and per-site bounds.
 Workers emit immutable results; TUI updates own all view state. Request IDs

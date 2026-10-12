@@ -151,14 +151,6 @@ func (t Theme) indigo() lipgloss.Style {
 	return style
 }
 
-func (t Theme) purple() lipgloss.Style {
-	style := lipgloss.NewStyle()
-	if t.Colors {
-		style = style.Foreground(t.Palette.Purple)
-	}
-	return style
-}
-
 func (t Theme) emerald() lipgloss.Style {
 	style := lipgloss.NewStyle()
 	if t.Colors {

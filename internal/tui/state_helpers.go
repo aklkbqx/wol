@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"net"
-	"strconv"
 	"strings"
 
 	"github.com/aklkbqx/wol/internal/store"
@@ -127,23 +126,6 @@ func (m *WakeModel) wakeCapability(device store.Device) wakeCapability {
 	return wakeCapability{state: "READY", detail: fmt.Sprintf("direct broadcast %s:%d", destination, port)}
 }
 
-func (m *WakeModel) remoteCapability(device store.Device) (state, detail string) {
-	if m.streaming[device.ID] {
-		return "STREAMING", "x to disconnect"
-	}
-	profile, ok := m.profiles[device.ID]
-	if !ok || !profile.Enabled {
-		return "SETUP", "press p to set up stream"
-	}
-	if err := validateRemoteProfile(profile); err != nil {
-		return "SETUP", "profile incomplete; press p"
-	}
-	if streamProfile(profile) {
-		return "READY", "sunshine · moonlight"
-	}
-	return "READY", strings.ToUpper(profile.Protocol) + " · native"
-}
-
 func (m *WakeModel) presenceDetail(device store.Device) string {
 	state := powerWord(m.deviceState(device))
 	if method := strings.TrimSpace(m.presenceMethod[device.ID]); method != "" && method != "none" {
@@ -196,18 +178,6 @@ func actionState(word string) string {
 	}
 }
 
-func (m *WakeModel) remoteSummary(devices []store.Device) (configured, setup int) {
-	for _, device := range devices {
-		state, _ := m.remoteCapability(device)
-		if state == "READY" {
-			configured++
-		} else {
-			setup++
-		}
-	}
-	return configured, setup
-}
-
 func (m *WakeModel) routeText(device store.Device) string {
 	if device.WakeRelayID == "" {
 		for _, s := range m.sites {
@@ -229,23 +199,6 @@ func (m *WakeModel) routeText(device store.Device) string {
 	}
 	destination, port := m.routeTarget(device)
 	return fmt.Sprintf("broadcast %s:%d", destination, port)
-}
-
-func (m *WakeModel) verifyText(device store.Device) string {
-	if strings.TrimSpace(device.IPAddress) == "" {
-		return "no IP address"
-	}
-	port := device.VerifyPort
-	if profile, ok := m.profiles[device.ID]; port == 0 && ok {
-		port = profile.VerifyPort
-	}
-	if port == 0 {
-		return device.IPAddress + " (automatic local probes)"
-	}
-	if port < 1 || port > 65535 {
-		return "invalid TCP port"
-	}
-	return net.JoinHostPort(device.IPAddress, strconv.Itoa(port))
 }
 
 func (m *WakeModel) routeTarget(device store.Device) (destination string, port int) {

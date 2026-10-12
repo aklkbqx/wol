@@ -396,6 +396,66 @@ func TestBrokerOneTimeTokenHostOriginCookieAndPage(t *testing.T) {
 	_ = response.Body.Close()
 }
 
+func TestBrokerProxySendsLocalForwardingHeaders(t *testing.T) {
+	seen := make(chan http.Header, 1)
+	hosts := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Header.Clone()
+		hosts <- r.Host
+		_, _ = w.Write([]byte("upstream " + r.URL.Path))
+	}))
+	defer upstream.Close()
+	upstreamURL, _ := url.Parse(upstream.URL)
+
+	server := httptest.NewUnstartedServer(nil)
+	server.Listener.Close()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Listener = listener
+	host := listener.Addr().String()
+	server.Config.Handler = newBroker(host, "once", "cookie", "csrf", Config{Protocol: "rdp", Host: "192.168.50.200", Port: 3389}, []byte("0123456789abcdef"), upstreamURL, func() {})
+	server.Start()
+	defer server.Close()
+
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Get(server.URL + "/s/once")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := response.Cookies()[0]
+	_ = response.Body.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, server.URL+"/guacamole/api/tokens", nil)
+	req.Header.Set("X-Forwarded-For", "203.0.113.9")
+	req.Header.Set("X-Forwarded-Host", "evil.test")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.AddCookie(cookie)
+	response, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || string(body) != "upstream /guacamole/api/tokens" {
+		t.Fatalf("proxied status/body = %d %q", response.StatusCode, body)
+	}
+	header, upstreamHost := <-seen, <-hosts
+	if upstreamHost != upstreamURL.Host {
+		t.Fatalf("upstream Host = %q, want %q", upstreamHost, upstreamURL.Host)
+	}
+	if got := header.Get("X-Forwarded-Host"); got != host {
+		t.Fatalf("X-Forwarded-Host = %q, want %q", got, host)
+	}
+	if got := header.Get("X-Forwarded-Proto"); got != "http" {
+		t.Fatalf("X-Forwarded-Proto = %q, want http", got)
+	}
+	if got := header.Values("X-Forwarded-For"); len(got) != 1 || got[0] != "127.0.0.1" {
+		t.Fatalf("X-Forwarded-For = %q, want only the loopback client", got)
+	}
+}
+
 func TestBrowserDisconnectClosesBrokerAndDockerResources(t *testing.T) {
 	upstream := loopbackServer(t)
 	defer upstream.Close()

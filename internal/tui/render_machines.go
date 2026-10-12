@@ -47,25 +47,6 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 	return list
 }
 
-func joinPanels(left, right, sep string, leftWidth int) string {
-	leftLines := strings.Split(left, "\n")
-	rightLines := strings.Split(right, "\n")
-	maxLines := max(len(leftLines), len(rightLines))
-	out := make([]string, maxLines)
-	for i := 0; i < maxLines; i++ {
-		var l, r string
-		if i < len(leftLines) {
-			l = leftLines[i]
-		}
-		if i < len(rightLines) {
-			r = rightLines[i]
-		}
-		pad := max(0, leftWidth-lipgloss.Width(stripANSI(l)))
-		out[i] = l + strings.Repeat(" ", pad) + sep + r
-	}
-	return strings.Join(out, "\n")
-}
-
 func (m *WakeModel) renderMachineList(devices []store.Device, width int) string {
 	rowWidth := max(1, width)
 	online, offline, unknown, _, _, _, _ := m.machineSummary(devices)
