@@ -112,6 +112,15 @@ native RDP, SSH, or VNC client registered on this computer. Sunshine profiles
 launch Moonlight. Install a client that handles the selected protocol first;
 native clients manage their own credentials and certificate settings.
 
+`wol remote pair NAME` pairs with Moonlight when it is installed. Without
+Moonlight, `--pin` pairs through the Sunshine admin API using `SUNSHINE_USER`
+and `SUNSHINE_PASS`, or a password prompt. Sunshine normally serves a
+self-signed certificate, so WOL refuses it and prints its SHA-256 without
+sending credentials. Compare that value on the Sunshine machine (for example
+`openssl x509 -in credentials/cacert.pem -noout -fingerprint -sha256` in
+Sunshine's config directory), then rerun with `--tls-fingerprint VALUE` or
+`SUNSHINE_TLS_FINGERPRINT`. Avoid `--pass`: arguments appear in process lists.
+
 `wol remote --browser NAME` opens RDP, SSH, or VNC through an ephemeral browser
 session on `127.0.0.1` using pinned Apache Guacamole
 containers, and opens a one-time localhost sign-in. Credentials are accepted

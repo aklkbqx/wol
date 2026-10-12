@@ -3,7 +3,10 @@ package sunshine
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,13 +33,27 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-// NewClient creates a Sunshine API client with TLS verification skipped for self-signed certificates.
-func NewClient(host string, port int, username, password string) *Client {
+// NewClient creates a Sunshine API client. Without pinnedSHA256 the server
+// certificate must chain to a system root; with it, the server's leaf
+// certificate must have that lowercase hex SHA-256 fingerprint.
+func NewClient(host string, port int, username, password, pinnedSHA256 string) *Client {
 	if port <= 0 {
 		port = DefaultAdminPort
 	}
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	tlsConfig := &tls.Config{}
+	if pinnedSHA256 != "" {
+		// Sunshine normally uses a self-signed certificate, so a pinned leaf
+		// certificate replaces chain verification instead of skipping it.
+		tlsConfig.InsecureSkipVerify = true
+		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
+			if len(state.PeerCertificates) == 0 {
+				return errors.New("Sunshine presented no certificate")
+			}
+			if presented := certificateFingerprint(state.PeerCertificates[0]); presented != pinnedSHA256 {
+				return &UntrustedCertificateError{Fingerprint: presented}
+			}
+			return nil
+		}
 	}
 	return &Client{
 		Host:     strings.TrimSpace(host),
@@ -44,10 +61,49 @@ func NewClient(host string, port int, username, password string) *Client {
 		Username: strings.TrimSpace(username),
 		Password: strings.TrimSpace(password),
 		HTTPClient: &http.Client{
-			Transport: transport,
+			Transport: &http.Transport{TLSClientConfig: tlsConfig},
 			Timeout:   5 * time.Second,
 		},
 	}
+}
+
+// UntrustedCertificateError reports a Sunshine certificate that neither the
+// system roots nor the pinned fingerprint trust. No request, and therefore no
+// credential, was sent over that connection.
+type UntrustedCertificateError struct {
+	// Fingerprint is the hex SHA-256 of the certificate Sunshine presented.
+	Fingerprint string
+}
+
+func (e *UntrustedCertificateError) Error() string {
+	return "Sunshine certificate SHA-256 " + e.Fingerprint + " is not trusted"
+}
+
+// NormalizeFingerprint accepts a SHA-256 certificate fingerprint as plain or
+// colon-separated hex (as printed by openssl) and returns lowercase hex.
+func NormalizeFingerprint(value string) (string, error) {
+	clean := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), ":", ""))
+	if decoded, err := hex.DecodeString(clean); err != nil || len(decoded) != sha256.Size {
+		return "", errors.New("certificate fingerprint must be 64 hex digits (SHA-256)")
+	}
+	return clean, nil
+}
+
+func certificateFingerprint(certificate *x509.Certificate) string {
+	sum := sha256.Sum256(certificate.Raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func untrustedCertificate(err error) *UntrustedCertificateError {
+	var untrusted *UntrustedCertificateError
+	if errors.As(err, &untrusted) {
+		return untrusted
+	}
+	var verifyErr *tls.CertificateVerificationError
+	if errors.As(err, &verifyErr) && len(verifyErr.UnverifiedCertificates) > 0 {
+		return &UntrustedCertificateError{Fingerprint: certificateFingerprint(verifyErr.UnverifiedCertificates[0])}
+	}
+	return nil
 }
 
 // Pair submits a 4-digit Moonlight PIN to Sunshine's /api/pin endpoint.
@@ -83,6 +139,9 @@ func (c *Client) Pair(ctx context.Context, pin string, clientName string) error 
 
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
+		if untrusted := untrustedCertificate(err); untrusted != nil {
+			return untrusted
+		}
 		return fmt.Errorf("connect to Sunshine API at %s:%d: %w", c.Host, c.Port, err)
 	}
 	defer resp.Body.Close()
