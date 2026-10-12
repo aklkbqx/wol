@@ -1,5 +1,7 @@
 # Unreleased
 
+- `wol batch`, `wol status`, `wol import` and `wol remote` accept flags after
+  machine names and files, like `wol wake` (#15).
 - Releases are signed: `SHA256SUMS.sig` is an Ed25519 signature over the
   manifest, checkable with `WOL_UPDATE_PUBLIC_KEY` and the public key in
   `docs/wol-release-public.pem` (#14).

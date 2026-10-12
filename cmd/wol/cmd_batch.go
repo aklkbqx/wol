@@ -29,7 +29,8 @@ func runBatch(args []string) int {
 	yes := flags.Bool("yes", false, "confirm sending wake packets to selected machines")
 	flags.Bool("no-input", false, "never prompt (batch commands never prompt)")
 	concurrency := flags.Int("concurrency", 16, "maximum simultaneous operations (1–32)")
-	if flags.Parse(args[1:]) != nil || *concurrency < 1 || *concurrency > 32 {
+	names, err := parseInterspersed(flags, args[1:])
+	if err != nil || *concurrency < 1 || *concurrency > 32 {
 		return 2
 	}
 	selectors := 0
@@ -39,7 +40,7 @@ func runBatch(args []string) int {
 	if *site != "" {
 		selectors++
 	}
-	if flags.NArg() > 0 {
+	if len(names) > 0 {
 		selectors++
 	}
 	if selectors != 1 {
@@ -85,7 +86,7 @@ func runBatch(args []string) int {
 		selected = devices
 	} else {
 		seen := map[string]bool{}
-		for _, name := range flags.Args() {
+		for _, name := range names {
 			d, err := findStoredDevice(repo, name)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
