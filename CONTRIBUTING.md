@@ -4,6 +4,9 @@ WOL is intentionally a standalone CLI/TUI. Keep changes focused on local
 inventory, presence checks, Wake-on-LAN delivery, terminal usability, and
 portable packaging.
 
+New to WOL? The [first-user test](docs/first-user-test.md) is one of the most
+useful contributions right now.
+
 Before opening a pull request:
 
 ```bash

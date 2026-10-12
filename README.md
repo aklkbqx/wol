@@ -214,6 +214,9 @@ make check
 make build
 ```
 
+New to WOL? The [first-user test](docs/first-user-test.md) takes about 30
+minutes and is the most useful help right now.
+
 The public project is deliberately CLI-first. Its optional browser remote is a
 temporary localhost runtime; private hosted web, authentication, deployment,
 and infrastructure code do not belong in this repository.
