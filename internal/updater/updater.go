@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -176,14 +177,33 @@ func CompareVersions(v1, v2 string) int {
 	if pre1 == "" && pre2 != "" {
 		return 1
 	}
-	if pre1 < pre2 {
-		return -1
-	}
-	if pre1 > pre2 {
-		return 1
-	}
+	return comparePreRelease(pre1, pre2)
+}
 
-	return 0
+// comparePreRelease orders prerelease identifiers as SemVer 2.0 does: numeric
+// identifiers compare numerically and rank below alphanumeric ones, and when
+// all shared identifiers match, the shorter list ranks first.
+func comparePreRelease(a, b string) int {
+	left, right := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(left) && i < len(right); i++ {
+		leftNumber, leftErr := strconv.Atoi(left[i])
+		rightNumber, rightErr := strconv.Atoi(right[i])
+		switch {
+		case leftErr == nil && rightErr == nil:
+			if order := cmp.Compare(leftNumber, rightNumber); order != 0 {
+				return order
+			}
+		case leftErr == nil:
+			return -1
+		case rightErr == nil:
+			return 1
+		default:
+			if order := strings.Compare(left[i], right[i]); order != 0 {
+				return order
+			}
+		}
+	}
+	return cmp.Compare(len(left), len(right))
 }
 
 func splitPreRelease(v string) (string, string) {
@@ -395,11 +415,17 @@ func (c *Client) ExecuteUpdate(ctx context.Context, opts UpdateOptions) (*Update
 }
 
 func (c *Client) fetchTagFromRedirect(ctx context.Context, url string) (string, error) {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	// Reuse the configured client (proxy, trusted CAs) but read the redirect
+	// itself instead of following it.
+	client := http.Client{}
+	if c.HTTPClient != nil {
+		client = *c.HTTPClient
+	}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	if client.Timeout == 0 {
+		client.Timeout = 10 * time.Second
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
@@ -787,6 +813,12 @@ func ReplaceExecutable(targetPath string, newBinary []byte) (string, error) {
 	if err := tmpFile.Chmod(0755); err != nil {
 		_ = tmpFile.Close()
 		return realPath, fmt.Errorf("chmod binary: %w", err)
+	}
+
+	// Flush before the rename so a crash cannot leave an empty executable.
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return realPath, fmt.Errorf("sync binary: %w", err)
 	}
 
 	if err := tmpFile.Close(); err != nil {
