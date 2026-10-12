@@ -20,10 +20,11 @@ func runStatus(arguments []string) int {
 	jsonOut := flags.Bool("json", false, "print structured result")
 	flags.Bool("no-input", false, "never prompt")
 	timeout := flags.Duration("timeout", 3*time.Second, "maximum probe time")
-	if err := flags.Parse(arguments); err != nil {
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 || *timeout <= 0 {
+	if len(positional) != 1 || *timeout <= 0 {
 		fmt.Fprintln(os.Stderr, "usage: wol status [--timeout 3s] <machine-name-or-id>")
 		return 2
 	}
@@ -33,7 +34,7 @@ func runStatus(arguments []string) int {
 		return 1
 	}
 	defer repository.Close()
-	device, err := findStoredDevice(repository, flags.Arg(0))
+	device, err := findStoredDevice(repository, positional[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
@@ -106,11 +107,12 @@ func runExport(arguments []string) int {
 func runImport(arguments []string) int {
 	flags := flag.NewFlagSet("import", flag.ContinueOnError)
 	databasePath := flags.String("db", envString("WOL_DB", store.DefaultDatabasePath()), "inventory database path")
-	if err := flags.Parse(arguments); err != nil || flags.NArg() != 1 {
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil || len(positional) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: wol import <inventory.json>")
 		return 2
 	}
-	input, err := os.Open(flags.Arg(0))
+	input, err := os.Open(positional[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open import: %v\n", err)
 		return 1

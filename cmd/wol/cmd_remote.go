@@ -52,15 +52,16 @@ func runRemote(arguments []string) int {
 	databasePath := flags.String("db", envString("WOL_DB", store.DefaultDatabasePath()), "SQLite database path")
 	noWake := flags.Bool("no-wake", false, "do not wake an unreachable machine")
 	browser := flags.Bool("browser", false, "use localhost Guacamole instead of the native client")
-	if err := flags.Parse(arguments); err != nil {
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		printRemoteUsage()
 		return 2
 	}
 
-	repository, device, code := remoteDevice(*databasePath, flags.Arg(0))
+	repository, device, code := remoteDevice(*databasePath, positional[0])
 	if code != 0 {
 		return code
 	}
@@ -115,10 +116,11 @@ func runRemotePair(arguments []string) int {
 	pass := flags.String("pass", "", "Sunshine admin password; visible in process listings, prefer SUNSHINE_PASS or the prompt")
 	fingerprint := flags.String("tls-fingerprint", envString("SUNSHINE_TLS_FINGERPRINT", ""), "SHA-256 of the Sunshine certificate to trust when it is self-signed (or SUNSHINE_TLS_FINGERPRINT)")
 	port := flags.Int("port", sunshine.DefaultAdminPort, "Sunshine admin HTTPS port")
-	if err := flags.Parse(arguments); err != nil {
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: wol remote pair [--pin 4-digit] [--name client-name] [--tls-fingerprint SHA256] <machine>")
 		return 2
 	}
@@ -137,7 +139,7 @@ func runRemotePair(arguments []string) int {
 		}
 		pinned = normalized
 	}
-	repository, device, code := remoteDevice(*databasePath, flags.Arg(0))
+	repository, device, code := remoteDevice(*databasePath, positional[0])
 	if code != 0 {
 		return code
 	}
@@ -207,14 +209,15 @@ func runRemoteConfigure(arguments []string) int {
 	res := flags.String("res", "", "Moonlight streaming resolution (e.g. 1920x1080, 2560x1440)")
 	bitrate := flags.Int("bitrate", 0, "Moonlight bitrate in kbps (e.g. 50000)")
 
-	if err := flags.Parse(arguments); err != nil {
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: wol remote configure [options] <machine>")
 		return 2
 	}
-	repository, device, code := remoteDevice(*databasePath, flags.Arg(0))
+	repository, device, code := remoteDevice(*databasePath, positional[0])
 	if code != 0 {
 		return code
 	}
@@ -258,14 +261,15 @@ func runRemoteConfigure(arguments []string) int {
 func runRemoteClear(arguments []string) int {
 	flags := flagSet("remote clear")
 	databasePath := flags.String("db", envString("WOL_DB", store.DefaultDatabasePath()), "SQLite database path")
-	if err := flags.Parse(arguments); err != nil {
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: wol remote clear [--db path] <machine>")
 		return 2
 	}
-	repository, device, code := remoteDevice(*databasePath, flags.Arg(0))
+	repository, device, code := remoteDevice(*databasePath, positional[0])
 	if code != 0 {
 		return code
 	}
@@ -281,10 +285,11 @@ func runRemoteClear(arguments []string) int {
 func runRemoteDoctor(arguments []string) int {
 	flags := flagSet("remote doctor")
 	databasePath := flags.String("db", envString("WOL_DB", store.DefaultDatabasePath()), "SQLite database path")
-	if err := flags.Parse(arguments); err != nil {
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() > 1 {
+	if len(positional) > 1 {
 		fmt.Fprintln(os.Stderr, "usage: wol remote doctor [--db path] [machine]")
 		return 2
 	}
@@ -314,8 +319,8 @@ func runRemoteDoctor(arguments []string) int {
 	}
 
 	targetReady := true
-	if flags.NArg() == 1 {
-		repository, device, code := remoteDevice(*databasePath, flags.Arg(0))
+	if len(positional) == 1 {
+		repository, device, code := remoteDevice(*databasePath, positional[0])
 		if code != 0 {
 			return code
 		}
