@@ -845,3 +845,15 @@ func ReplaceExecutable(targetPath string, newBinary []byte) (string, error) {
 	success = true
 	return realPath, nil
 }
+
+// RemoveStaleExecutable deletes the "<executable>.old" copy that
+// ReplaceExecutable leaves on Windows, where a running program cannot be
+// deleted. It resolves symlinks the same way ReplaceExecutable does.
+func RemoveStaleExecutable(executable string) {
+	realPath, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		realPath = executable
+	}
+	// Errors are expected and ignored: the file may be gone or still locked.
+	_ = os.Remove(filepath.Clean(realPath) + ".old")
+}
