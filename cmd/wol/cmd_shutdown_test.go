@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"path/filepath"
 	"testing"
 
@@ -108,5 +109,26 @@ func TestShutdownConfigureMergesUnspecifiedFields(t *testing.T) {
 	}
 	if profile.SSHUser != "alice" || profile.SSHPort != 2222 || profile.SSHKey != "/tmp/id_ed25519" || profile.Platform != "linux" || !profile.UseSudo {
 		t.Fatalf("merged profile = %+v", profile)
+	}
+}
+
+func TestParseMachineAndFlagsKeepsFlagsOnBothSides(t *testing.T) {
+	for _, args := range [][]string{
+		{"pc", "--db", "x.db", "--cancel"},
+		{"--db", "x.db", "pc", "--cancel"},
+		{"--db", "x.db", "--cancel", "pc"},
+	} {
+		flags := flag.NewFlagSet("shutdown", flag.ContinueOnError)
+		db := flags.String("db", "", "")
+		cancel := flags.Bool("cancel", false, "")
+		machine, err := parseMachineAndFlags(args, flags)
+		// Dropping --cancel here would turn a cancel request into an immediate shutdown.
+		if err != nil || machine != "pc" || *db != "x.db" || !*cancel {
+			t.Fatalf("%v: machine=%q db=%q cancel=%v err=%v", args, machine, *db, *cancel, err)
+		}
+	}
+	flags := flag.NewFlagSet("shutdown", flag.ContinueOnError)
+	if _, err := parseMachineAndFlags([]string{"pc", "other"}, flags); err == nil {
+		t.Fatal("two machine names were accepted")
 	}
 }

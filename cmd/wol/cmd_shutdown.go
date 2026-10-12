@@ -361,25 +361,21 @@ func printShutdownUsage() {
 }
 
 func parseMachineAndFlags(arguments []string, flags *flag.FlagSet) (string, error) {
-	if len(arguments) == 0 {
-		return "", nil
-	}
-	if !strings.HasPrefix(arguments[0], "-") {
-		machine := arguments[0]
-		if err := flags.Parse(arguments[1:]); err != nil {
-			return "", err
-		}
-		if machine == "" && flags.NArg() > 0 {
-			machine = flags.Arg(0)
-		}
-		return machine, nil
-	}
-	if err := flags.Parse(arguments); err != nil {
+	// Flags may come before or after the machine name; stopping at the name
+	// would silently drop a later --cancel and shut the machine down instead.
+	positional, err := parseInterspersed(flags, arguments)
+	if err != nil {
 		return "", err
 	}
-	machine := ""
-	if flags.NArg() > 0 {
-		machine = flags.Arg(0)
+	switch len(positional) {
+	case 0:
+		return "", nil
+	case 1:
+		return positional[0], nil
+	default:
+		// The flag package already reports parse errors; report this one too.
+		err := fmt.Errorf("expected one machine, got %d: %s", len(positional), strings.Join(positional, " "))
+		fmt.Fprintln(os.Stderr, err)
+		return "", err
 	}
-	return machine, nil
 }
