@@ -35,6 +35,11 @@ func TestCompareVersions(t *testing.T) {
 		{"0.4.7", "0.4.7-beta.1", 1},
 		{"0.4.7-beta.1", "0.4.7-beta.2", -1},
 		{"0.4.7-beta.2", "0.4.7-beta.1", 1},
+		{"0.4.7-beta.2", "0.4.7-beta.10", -1},
+		{"0.4.7-beta.10", "0.4.7-beta.2", 1},
+		{"0.4.7-rc.1", "0.4.7-beta.10", 1},
+		{"0.4.7-1", "0.4.7-alpha", -1},
+		{"0.4.7-alpha", "0.4.7-alpha.1", -1},
 		{"", "0.4.7", -1},
 		{"0.4.7", "", 1},
 	}
@@ -212,6 +217,34 @@ func TestCheckLatest(t *testing.T) {
 	}
 	if resultSame.UpdateAvailable {
 		t.Errorf("expected no update available for 0.4.8 -> 0.4.8")
+	}
+}
+
+// When the API is rate limited, the latest tag comes from the web redirect,
+// which must use the same configured HTTP client (proxy, CA, timeouts).
+func TestFetchLatestReleaseFallsBackToWebRedirectWithConfiguredClient(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/aklkbqx/wol/releases/latest":
+			http.Error(w, "rate limited", http.StatusForbidden)
+		case "/aklkbqx/wol/releases/latest":
+			if r.Method != http.MethodHead {
+				http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+				return
+			}
+			http.Redirect(w, r, "https://github.com/aklkbqx/wol/releases/tag/v0.4.9", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewClient("0.4.8", WithBaseAPIURL(server.URL), WithBaseWebURL(server.URL), WithHTTPClient(server.Client()))
+	release, err := client.FetchLatestRelease(context.Background())
+	if err != nil {
+		t.Fatalf("FetchLatestRelease fallback failed: %v", err)
+	}
+	if release.Tag != "v0.4.9" {
+		t.Fatalf("fallback tag = %q, want v0.4.9", release.Tag)
 	}
 }
 
