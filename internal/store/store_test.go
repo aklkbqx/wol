@@ -543,3 +543,79 @@ func TestImportRemapsGroupMembers(t *testing.T) {
 		t.Fatalf("group members were not remapped in order: groups=%+v devices=%+v", groups, devices)
 	}
 }
+
+func TestDeleteWakeRelayProtectsSitesAndClearsMachines(t *testing.T) {
+	repository, err := Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	ctx := t.Context()
+	relay, err := repository.CreateWakeRelay(ctx, WakeRelay{Name: "router", Address: "192.168.50.1", Port: 22, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	site, err := repository.CreateSite(ctx, Site{Name: "branch", WakeRelayID: relay.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, err := repository.CreateDevice(ctx, Device{Name: "pc", MACAddress: "02:00:00:00:00:81", WakeRelayID: relay.ID, Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteWakeRelay(ctx, relay.ID); err == nil {
+		t.Fatal("deleted a relay that a site still routes through")
+	}
+	site.WakeRelayID = ""
+	if _, err := repository.UpdateSite(ctx, site.ID, site); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteWakeRelay(ctx, relay.ID); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repository.GetDevice(ctx, device.ID)
+	if err != nil || stored.WakeRelayID != "" {
+		t.Fatalf("machine after relay delete = %+v, %v; want relay cleared", stored, err)
+	}
+	if err := repository.DeleteWakeRelay(ctx, relay.ID); err != ErrNotFound {
+		t.Fatalf("second delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteGroupKeepsMachines(t *testing.T) {
+	repository, err := Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	ctx := t.Context()
+	first, err := repository.CreateDevice(ctx, Device{Name: "pc-1", MACAddress: "02:00:00:00:00:91", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := repository.CreateDevice(ctx, Device{Name: "pc-2", MACAddress: "02:00:00:00:00:92", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := repository.CreateGroup(ctx, Group{Name: "lab", DeviceIDs: []string{first.ID, second.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DeleteGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	var members int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM group_members`).Scan(&members); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := repository.ListDevices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if members != 0 || len(devices) != 2 {
+		t.Fatalf("after group delete: %d member rows, %d machines; want 0 and 2", members, len(devices))
+	}
+	if err := repository.DeleteGroup(ctx, group.ID); err != ErrNotFound {
+		t.Fatalf("second delete = %v, want ErrNotFound", err)
+	}
+}
