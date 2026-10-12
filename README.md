@@ -1,8 +1,25 @@
-# WOL Wake Desk
+# WOL Wake Desk: Wake-on-LAN CLI and terminal UI
 
-WOL is a fast, standalone Wake-on-LAN CLI and terminal interface. It opens your
-local machine inventory directly from SQLite. Wake and inventory features do
-not require a web application or hosted service.
+[![Release](https://img.shields.io/github/v/release/aklkbqx/wol)](https://github.com/aklkbqx/wol/releases/latest)
+[![License](https://img.shields.io/github/license/aklkbqx/wol)](LICENSE)
+[![Go](https://img.shields.io/github/go-mod/go-version/aklkbqx/wol)](go.mod)
+
+WOL wakes computers on your network with Wake-on-LAN magic packets, checks
+whether they came online, and opens a remote session when they do. It is a
+single executable for macOS, Linux and Windows with an interactive terminal UI
+(Wake Desk) and a scriptable CLI. The machine inventory is a local SQLite file;
+wake and inventory features need no web application, account or hosted service.
+
+- Wake one machine, a site or a selection. Batch wakes run concurrently with
+  per-site limits, cancellation and retry of unsuccessful targets.
+- Wake through a router relay over SSH (`etherwake` on OpenWrt) when the target
+  sits behind another router or at another site.
+- Status checks combine TCP, ping and ARP, so machines that block ping still
+  report the right state.
+- Wake & Remote: wake if needed, then open RDP, SSH, VNC or Moonlight for a
+  Sunshine host.
+- LAN discovery, inventory import/export, JSON Lines output for scripts and a
+  checksum-verified `wol update`.
 
 ```text
  wol  checked 05:27:04
