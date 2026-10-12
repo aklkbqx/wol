@@ -1,4 +1,4 @@
-# Unreleased
+# 0.4.16 — 2026-10-13
 
 - `wol batch`, `wol status`, `wol import` and `wol remote` accept flags after
   machine names and files, like `wol wake` (#15).
