@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/aklkbqx/wol/internal/remoteopen"
 	"github.com/aklkbqx/wol/internal/store"
 	"github.com/aklkbqx/wol/internal/sunshine"
+	"golang.org/x/term"
 )
 
 type remoteManager interface {
@@ -109,14 +111,31 @@ func runRemotePair(arguments []string) int {
 	pin := flags.String("pin", "", "optional 4-digit PIN for moonlight pair / Sunshine")
 	clientName := flags.String("name", "wol-client", "client name to register with Sunshine")
 	user := flags.String("user", envString("SUNSHINE_USER", ""), "Sunshine admin username (or SUNSHINE_USER)")
-	pass := flags.String("pass", envString("SUNSHINE_PASS", ""), "Sunshine admin password (or SUNSHINE_PASS)")
+	// The password is never a flag default: usage output would print it.
+	pass := flags.String("pass", "", "Sunshine admin password; visible in process listings, prefer SUNSHINE_PASS or the prompt")
+	fingerprint := flags.String("tls-fingerprint", envString("SUNSHINE_TLS_FINGERPRINT", ""), "SHA-256 of the Sunshine certificate to trust when it is self-signed (or SUNSHINE_TLS_FINGERPRINT)")
 	port := flags.Int("port", sunshine.DefaultAdminPort, "Sunshine admin HTTPS port")
 	if err := flags.Parse(arguments); err != nil {
 		return 2
 	}
 	if flags.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: wol remote pair [--pin 4-digit] [--name client-name] <machine>")
+		fmt.Fprintln(os.Stderr, "usage: wol remote pair [--pin 4-digit] [--name client-name] [--tls-fingerprint SHA256] <machine>")
 		return 2
+	}
+	password := *pass
+	if password != "" {
+		fmt.Fprintln(os.Stderr, "warning: --pass is visible in process listings and shell history; prefer SUNSHINE_PASS or the password prompt")
+	} else {
+		password = os.Getenv("SUNSHINE_PASS")
+	}
+	pinned := ""
+	if strings.TrimSpace(*fingerprint) != "" {
+		normalized, err := sunshine.NormalizeFingerprint(*fingerprint)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "--tls-fingerprint: %v\n", err)
+			return 2
+		}
+		pinned = normalized
 	}
 	repository, device, code := remoteDevice(*databasePath, flags.Arg(0))
 	if code != 0 {
@@ -144,10 +163,27 @@ func runRemotePair(arguments []string) int {
 		fmt.Fprintln(os.Stderr, "Moonlight is not installed. Install it, or pass --pin with SUNSHINE_USER/SUNSHINE_PASS to pair through Sunshine.")
 		return 2
 	}
+	if strings.TrimSpace(*user) != "" && password == "" && term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Fprint(os.Stderr, "Sunshine password: ")
+		secret, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read Sunshine password: %v\n", err)
+			return 1
+		}
+		password = string(secret)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	client := sunshine.NewClient(host, *port, *user, *pass)
+	client := sunshine.NewClient(host, *port, *user, password, pinned)
 	if err := client.Pair(ctx, *pin, *clientName); err != nil {
+		var untrusted *sunshine.UntrustedCertificateError
+		if errors.As(err, &untrusted) {
+			fmt.Fprintf(os.Stderr, "Sunshine on %s (%s:%d) presented an untrusted certificate; credentials were not sent.\n", device.Name, host, *port)
+			fmt.Fprintf(os.Stderr, "Presented SHA-256: %s\n", untrusted.Fingerprint)
+			fmt.Fprintln(os.Stderr, "Compare it with Sunshine's certificate on that machine, then rerun with --tls-fingerprint and that value.")
+			return 3
+		}
 		fmt.Fprintf(os.Stderr, "pair Moonlight with Sunshine on %s (%s:%d): %v\n", device.Name, host, *port, err)
 		return 3
 	}
@@ -361,7 +397,7 @@ func runRemoteSetup(arguments []string) int {
 
 func printRemoteUsage() {
 	fmt.Fprintln(os.Stderr, "usage: wol remote [--no-wake] [--browser] <machine>")
-	fmt.Fprintln(os.Stderr, "       wol remote pair [--pin 4-digit] <machine>")
+	fmt.Fprintln(os.Stderr, "       wol remote pair [--pin 4-digit] [--tls-fingerprint SHA256] <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote configure [options] <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote clear <machine>")
 	fmt.Fprintln(os.Stderr, "       wol remote doctor [machine] | setup")
