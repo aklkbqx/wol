@@ -1,3 +1,8 @@
+# Unreleased
+
+- Improve normal-text contrast on dark TUI panels and add `WOL_TUI_REDACT=1`
+  to hide identifiers and diagnostic details without changing action inputs (#19).
+
 # 0.4.17 — 2026-10-13
 
 - `wol shutdown` keeps flags that follow the machine name when other flags come

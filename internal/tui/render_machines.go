@@ -39,7 +39,7 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 	}
 	list := m.renderMachineList(devices, width)
 	if target, ok := m.actionDevice(); ok && (m.waking || m.opening || m.shuttingDown) {
-		return list + "\n" + m.theme.accent().Render(fitText(target.Name+"  "+m.renderSignalPath(target, max(1, width-len(target.Name)-4)), width))
+		return list + "\n" + m.theme.accent().Render(fitText(m.privateField(target.Name)+"  "+m.renderSignalPath(target, max(1, width-len(m.privateField(target.Name))-4)), width))
 	}
 	if mode == LayoutWide {
 		return list + "\n" + m.renderInspector(devices, width)
@@ -88,7 +88,7 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 		}
 		power := powerWord(m.deviceState(device))
 		action := m.actionWord(device)
-		name := padVisible(fitText(device.Name, nameWidth), nameWidth)
+		name := padVisible(fitText(m.privateField(device.Name), nameWidth), nameWidth)
 		if highlighted {
 			name = m.theme.accent().Render(name)
 		}
@@ -115,7 +115,7 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 			powerStyled = m.theme.accent().Render(padVisible(power, 11))
 		}
 		if width < 36 {
-			rows = append(rows, fitText(marker+" "+fitText(device.Name, max(1, rowWidth-2)), rowWidth))
+			rows = append(rows, fitText(marker+" "+fitText(m.privateField(device.Name), max(1, rowWidth-2)), rowWidth))
 			rows = append(rows, fitText("  "+power+"  "+action, rowWidth))
 		} else {
 			rows = append(rows, fitText(marker+" "+name+"  "+powerStyled+"  "+actionStyled, rowWidth))
@@ -126,7 +126,7 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 	}
 	showSplit := m.width >= 76 && m.height >= 18
 	if selected, ok := m.selectedDevice(devices); ok && width >= 40 && !showSplit {
-		rows = append(rows, "", m.theme.muted().Render(fitText(selected.IPAddress+"  "+selected.MACAddress+"  "+m.routeText(selected), rowWidth)))
+		rows = append(rows, "", m.theme.muted().Render(fitText(m.privateField(selected.IPAddress)+"  "+m.privateField(selected.MACAddress)+"  "+m.privateField(m.routeText(selected)), rowWidth)))
 	}
 	return strings.Join(rows, "\n")
 }

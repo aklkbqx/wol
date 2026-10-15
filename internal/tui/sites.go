@@ -62,7 +62,7 @@ func (m *WakeModel) renderSites(width int) string {
 		if s.WakeRelayID != "" {
 			route = "relay"
 		}
-		rows = append(rows, fmt.Sprintf("%s %s · %s · %s", mark, s.Name, s.Subnet, route))
+		rows = append(rows, fmt.Sprintf("%s %s · %s · %s", mark, m.privateField(s.Name), m.privateField(s.Subnet), route))
 	}
 	if len(m.sites) == 0 {
 		rows = append(rows, "Add Home, Lab or Office to organize networks.")

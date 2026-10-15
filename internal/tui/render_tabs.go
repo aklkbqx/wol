@@ -25,7 +25,7 @@ func (m *WakeModel) renderRoutes(width int) string {
 		for i := start; i < end; i++ {
 			relay := m.relays[i]
 			marker := " "
-			name := fitText(relay.Name, max(4, min(18, width/3)))
+			name := fitText(m.privateField(relay.Name), max(4, min(18, width/3)))
 			if i == m.selected {
 				marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
 				name = m.theme.accent().Render(name)
@@ -34,7 +34,7 @@ func (m *WakeModel) renderRoutes(width int) string {
 			if !relay.Enabled {
 				state = "off"
 			}
-			rows = append(rows, fitText(fmt.Sprintf("%s %s  %s  %s:%d", marker, name, state, fitText(relay.Address, max(4, min(16, width/3))), relay.Port), width))
+			rows = append(rows, fitText(fmt.Sprintf("%s %s  %s  %s:%d", marker, name, state, fitText(m.privateField(relay.Address), max(4, min(16, width/3))), relay.Port), width))
 		}
 	}
 	return strings.Join(rows, "\n")
@@ -49,7 +49,7 @@ func (m *WakeModel) renderActivity(width int) string {
 		for i := start; i < end; i++ {
 			attempt := m.history[i]
 			marker := " "
-			target := fitText(attempt.TargetName, max(4, min(16, width/3)))
+			target := fitText(m.privateField(attempt.TargetName), max(4, min(16, width/3)))
 			if i == m.selected {
 				marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
 				target = m.theme.accent().Render(target)

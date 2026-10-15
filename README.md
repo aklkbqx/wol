@@ -191,6 +191,12 @@ Use `WOL_TUI_REDUCED_MOTION=1` or `WOL_TUI_MOTION=off` to disable it,
 
 ## Inventory and privacy
 
+Set `WOL_TUI_REDACT=1` before opening Wake Desk to hide machine and network
+identifiers in the terminal, including form values and diagnostic details.
+Power and action indicators remain visible. This only changes TUI presentation:
+inventory, exports, logs and the network values used by actions are unchanged.
+Turn it off when you need to inspect connection details or edit values visibly.
+
 Inventory is stored locally in SQLite. Wake Desk never displays its filesystem
 path. Set `WOL_DATA_DIR` to choose a data directory or `WOL_DB` to select an
 explicit database for automation.

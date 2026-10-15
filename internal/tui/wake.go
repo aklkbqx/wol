@@ -165,6 +165,7 @@ type WakeModel struct {
 	version           string
 	credit            string
 	theme             Theme
+	redactIdentifiers bool
 	motion            Motion
 
 	width          int
@@ -239,25 +240,26 @@ func NewWakeModel(repository *store.Store, version, credit string) *WakeModel {
 		credit = buildinfo.Credit
 	}
 	return &WakeModel{
-		repository:     repository,
-		service:        wakeservice.NewService(repository, wakeservice.Hooks{}),
-		version:        version,
-		credit:         credit,
-		theme:          DetectTheme(),
-		motion:         NewMotion(MotionEnabled()),
-		width:          80,
-		height:         24,
-		presence:       make(map[string]string),
-		presenceMethod: make(map[string]string),
-		profiles:       make(map[string]store.RemoteProfile),
-		streaming:      make(map[string]bool),
-		checkedDevice:  make(map[string]time.Time),
-		detector:       presence.NewDetector(),
-		status:         "Loading local inventory...",
-		loading:        true,
-		phase:          phaseBootLoading,
-		loadingKind:    loadingBoot,
-		loadingStage:   stageInventory,
+		repository:        repository,
+		service:           wakeservice.NewService(repository, wakeservice.Hooks{}),
+		version:           version,
+		credit:            credit,
+		theme:             DetectTheme(),
+		redactIdentifiers: envOn("WOL_TUI_REDACT"),
+		motion:            NewMotion(MotionEnabled()),
+		width:             80,
+		height:            24,
+		presence:          make(map[string]string),
+		presenceMethod:    make(map[string]string),
+		profiles:          make(map[string]store.RemoteProfile),
+		streaming:         make(map[string]bool),
+		checkedDevice:     make(map[string]time.Time),
+		detector:          presence.NewDetector(),
+		status:            "Loading local inventory...",
+		loading:           true,
+		phase:             phaseBootLoading,
+		loadingKind:       loadingBoot,
+		loadingStage:      stageInventory,
 	}
 }
 
@@ -935,7 +937,7 @@ func (m *WakeModel) View() string {
 	}
 	headerParts = append(headerParts, m.theme.muted().Render(m.freshnessText()))
 	if m.siteFilter != "" {
-		headerParts = append(headerParts, m.siteName(m.siteFilter))
+		headerParts = append(headerParts, m.privateField(m.siteName(m.siteFilter)))
 	}
 	if m.stateFilter != "" {
 		headerParts = append(headerParts, m.stateFilter)
@@ -973,7 +975,7 @@ func (m *WakeModel) View() string {
 	}
 	showStatus := m.height <= 0 || m.height >= 22 || m.loading || m.waking || m.opening || m.shuttingDown || m.checking || statusNeedsAttention(m.status)
 	if m.status != "" && showStatus {
-		status := m.status
+		status := m.privateMessage(m.status)
 		if m.motion.Active(time.Now()) && m.motion.Stage == StageSignal {
 			frames := []string{"·", "o", "O", "o"}
 			if m.theme.ASCII {
@@ -984,7 +986,7 @@ func (m *WakeModel) View() string {
 		builder.WriteString("\n" + renderNotice(m.theme, fitText(status, inner), inner))
 	}
 	if m.filtering {
-		builder.WriteString("\n" + m.theme.accent().Render("filter  "+m.filterInput+"_"))
+		builder.WriteString("\n" + m.theme.accent().Render("filter  "+m.privateField(m.filterInput)+"_"))
 	}
 	if m.confirm != "" {
 		builder.WriteString("\n" + renderPanel(m.theme, "delete", "", "y confirm   n cancel", inner))

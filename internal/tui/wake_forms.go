@@ -730,13 +730,13 @@ func (m *WakeModel) renderForm(width int) string {
 		} else if i < len(form.values) {
 			val = form.values[i]
 		}
-		rows = append(rows, fmt.Sprintf("%s %-18s %s", marker, label, fitText(val, max(12, width-26))))
+		rows = append(rows, fmt.Sprintf("%s %-18s %s", marker, label, fitText(m.privateField(val), max(12, width-26))))
 	}
 	if end < len(form.labels) {
 		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("%d more field(s)", len(form.labels)-end)))
 	}
 	if form.error != "" {
-		rows = append(rows, "", m.theme.danger().Render(form.error))
+		rows = append(rows, "", m.theme.danger().Render(m.privateMessage(form.error)))
 	}
 	title := "machine"
 	if form.kind == relayForm {

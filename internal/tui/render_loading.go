@@ -9,7 +9,7 @@ import (
 )
 
 func (m *WakeModel) renderRemoteLoadingView(width int, mode LayoutMode) string {
-	target := m.actionTarget
+	target := m.privateField(m.actionTarget)
 	if strings.TrimSpace(target) == "" {
 		target = "machine"
 	}
@@ -52,7 +52,7 @@ func (m *WakeModel) renderRemoteLoadingView(width int, mode LayoutMode) string {
 func (m *WakeModel) renderLoadingView(width int, mode LayoutMode) string {
 	// 1. Error state (phaseLoadError)
 	if m.phase == phaseLoadError {
-		message := m.loadingError
+		message := m.privateMessage(m.loadingError)
 		if message == "" {
 			message = "The local inventory could not be read."
 		}
@@ -110,7 +110,7 @@ func (m *WakeModel) renderLoadingView(width int, mode LayoutMode) string {
 		builder.WriteString("\n" + fitText(m.theme.title().Render("wol"), width) + "\n")
 		builder.WriteString("\n" + fitText(m.theme.muted().Render(title), width) + "\n")
 		if m.loadingTarget != "" {
-			builder.WriteString(fitText(m.theme.accent().Render(m.loadingTarget), width) + "\n")
+			builder.WriteString(fitText(m.theme.accent().Render(m.privateField(m.loadingTarget)), width) + "\n")
 		}
 		builder.WriteString("\n" + fitText(m.loadingSignal(width), width) + "\n\n")
 		builder.WriteString(fitText(m.theme.accent().Render(stage), width) + "\n\n")
@@ -130,7 +130,7 @@ func (m *WakeModel) renderLoadingView(width int, mode LayoutMode) string {
 	var body strings.Builder
 	body.WriteString("\n")
 	if m.loadingTarget != "" {
-		body.WriteString(m.theme.muted().Render("TARGET  : ") + m.theme.cyan().Render(fitText(m.loadingTarget, innerWidth-12)) + "\n")
+		body.WriteString(m.theme.muted().Render("TARGET  : ") + m.theme.cyan().Render(fitText(m.privateField(m.loadingTarget), innerWidth-12)) + "\n")
 	} else if count > 0 {
 		body.WriteString(m.theme.muted().Render("TARGET  : ") + m.theme.cyan().Render(fitText(fmt.Sprintf("Fleet (%d nodes)", count), innerWidth-12)) + "\n")
 	} else {

@@ -50,9 +50,9 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	}
 	lines := []string{
 		m.theme.accent().Render(fitText(lock+"INSPECTOR", rowWidth)),
-		m.theme.title().Render(fitText(device.Name, rowWidth)),
+		m.theme.title().Render(fitText(m.privateField(device.Name), rowWidth)),
 		fitText(power+"  "+action, rowWidth),
-		m.theme.muted().Render(fitText(wake.detail, rowWidth)),
+		m.theme.muted().Render(fitText(m.privateMessage(wake.detail), rowWidth)),
 	}
 	if active {
 		lines = append(lines, m.renderSignalPath(device, rowWidth), m.theme.muted().Render("esc cancel"))
@@ -61,10 +61,10 @@ func (m *WakeModel) renderInspector(devices []store.Device, width int) string {
 	}
 	lines = append(lines,
 		m.theme.muted().Render(divider),
-		m.theme.muted().Render("IP   : ")+fitText(device.IPAddress, max(1, rowWidth-7)),
+		m.theme.muted().Render("IP   : ")+fitText(m.privateField(device.IPAddress), max(1, rowWidth-7)),
 		m.theme.muted().Render("Seen : ")+fitText(m.presenceDetail(device), max(1, rowWidth-7)),
-		m.theme.muted().Render("MAC  : ")+fitText(device.MACAddress, max(1, rowWidth-7)),
-		m.theme.muted().Render("Route: ")+fitText(m.routeText(device), max(1, rowWidth-7)),
+		m.theme.muted().Render("MAC  : ")+fitText(m.privateField(device.MACAddress), max(1, rowWidth-7)),
+		m.theme.muted().Render("Route: ")+fitText(m.privateField(m.routeText(device)), max(1, rowWidth-7)),
 	)
 	return strings.Join(lines, "\n")
 }
@@ -87,7 +87,7 @@ func (m *WakeModel) renderActionPicker(devices []store.Device, width int) string
 		{"P", "power off"},
 		{"esc", "cancel"},
 	}
-	rows := []string{m.theme.title().Render(fitText(device.Name, max(1, width))), ""}
+	rows := []string{m.theme.title().Render(fitText(m.privateField(device.Name), max(1, width))), ""}
 	for i, item := range items {
 		marker := " "
 		label := item.label
@@ -102,7 +102,7 @@ func (m *WakeModel) renderActionPicker(devices []store.Device, width int) string
 
 func (m *WakeModel) renderSignalPath(device store.Device, width int) string {
 	if m.action == "shutdown-wait" {
-		return m.renderActionPath([]string{"DESK", "SSH", strings.ToUpper(fitText(device.Name, 12))}, width)
+		return m.renderActionPath([]string{"DESK", "SSH", strings.ToUpper(fitText(m.privateField(device.Name), 12))}, width)
 	}
 	if m.action == "wake-remote" {
 		last := "REMOTE"
@@ -115,7 +115,7 @@ func (m *WakeModel) renderSignalPath(device store.Device, width int) string {
 	if strings.EqualFold(device.WakeStrategy, "relay") || device.WakeRelayID != "" {
 		route = "RELAY"
 	}
-	return m.renderActionPath([]string{"DESK", route, strings.ToUpper(fitText(device.Name, 12))}, width)
+	return m.renderActionPath([]string{"DESK", route, strings.ToUpper(fitText(m.privateField(device.Name), 12))}, width)
 }
 
 func (m *WakeModel) pathPositionAt(now time.Time) int {

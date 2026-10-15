@@ -129,7 +129,7 @@ func (m *WakeModel) wakeCapability(device store.Device) wakeCapability {
 func (m *WakeModel) presenceDetail(device store.Device) string {
 	state := powerWord(m.deviceState(device))
 	if method := strings.TrimSpace(m.presenceMethod[device.ID]); method != "" && method != "none" {
-		return state + " via " + method
+		return state + " via " + m.privateField(method)
 	}
 	return state
 }

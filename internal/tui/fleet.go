@@ -178,7 +178,7 @@ func (m *WakeModel) renderBatchPreview(width int) string {
 	for _, d := range m.batchTargets {
 		name := m.siteName(d.SiteID)
 		if !seen[name] {
-			lines = append(lines, fmt.Sprintf("%s: %d", name, sites[name]))
+			lines = append(lines, fmt.Sprintf("%s: %d", m.privateField(name), sites[name]))
 			seen[name] = true
 		}
 	}
@@ -190,7 +190,7 @@ func (m *WakeModel) renderBatchPreview(width int) string {
 			lines = append(lines, "… remaining targets included in count")
 			break
 		}
-		lines = append(lines, d.Name+" · "+m.siteName(d.SiteID))
+		lines = append(lines, m.privateField(d.Name)+" · "+m.privateField(m.siteName(d.SiteID)))
 	}
 	lines = append(lines, "j/k scroll · Enter confirm · Esc cancel")
 	for i := range lines {
@@ -249,9 +249,9 @@ func (m *WakeModel) renderBatchResults(width int) string {
 	start := max(0, m.batchPreviewIndex)
 	end := min(len(m.batchResults), start+max(1, m.height-12))
 	for _, r := range m.batchResults[start:end] {
-		rows = append(rows, r.Name+" · "+r.Status+" · "+r.Method)
+		rows = append(rows, m.privateField(r.Name)+" · "+r.Status+" · "+m.privateField(r.Method))
 		if r.Message != "" {
-			rows = append(rows, r.Message)
+			rows = append(rows, m.privateMessage(r.Message))
 		}
 	}
 	if len(rows) > max(1, m.height-9) {

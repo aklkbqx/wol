@@ -190,7 +190,7 @@ func (m *WakeModel) showNeighborForm(msg lanPrepareMsg) {
 func (m *WakeModel) renderLANDiscover(width int) string {
 	rowWidth := max(1, width)
 	rows := []string{
-		m.theme.muted().Render(fitText(fmt.Sprintf("lan %s · %d new · %d known · %d ip updates", m.lanIface, len(m.lanUnknown), len(m.lanHosts), m.lanUpdated), rowWidth)),
+		m.theme.muted().Render(fitText(fmt.Sprintf("lan %s · %d new · %d known · %d ip updates", m.privateField(m.lanIface), len(m.lanUnknown), len(m.lanHosts), m.lanUpdated), rowWidth)),
 		"",
 	}
 	if m.lanCount() == 0 {
@@ -233,6 +233,6 @@ func (m *WakeModel) lanLine(index int, name, mac, state string, width int) strin
 	if index == m.lanSelected {
 		marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
 	}
-	line := marker + " " + padVisible(fitText(name, 28), 28) + "  " + padVisible(state, 8) + "  " + mac
+	line := marker + " " + padVisible(fitText(m.privateField(name), 28), 28) + "  " + padVisible(state, 8) + "  " + m.privateField(mac)
 	return fitText(line, width)
 }
