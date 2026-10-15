@@ -1,4 +1,4 @@
-# Unreleased
+# 0.4.18 — 2026-10-15
 
 - Improve normal-text contrast on dark TUI panels and add `WOL_TUI_REDACT=1`
   to hide identifiers and diagnostic details without changing action inputs (#19).
