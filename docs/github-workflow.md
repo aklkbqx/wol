@@ -45,3 +45,11 @@ platforms as unverified. Never include credentials, real inventories, IP or
 MAC addresses, or private host names.
 
 Verification is local (`make verify`); this project uses no cloud CI.
+
+## Website
+
+The website at [wol.aklkbqx.com](https://wol.aklkbqx.com) has its own
+repository, `aklkbqx/wol-site`, checked out at `site/` (ignored here). It uses
+the same labels and closing rules. Website issues and releases live in that
+repository; a tool release that the site should advertise also needs a site
+release, because the site pins the signed tool release it links to.
