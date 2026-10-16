@@ -1,230 +1,220 @@
-# WOL Wake Desk: Wake-on-LAN CLI and terminal UI
+# WOL Wake Desk
 
 [![Release](https://img.shields.io/github/v/release/aklkbqx/wol)](https://github.com/aklkbqx/wol/releases/latest)
 [![License](https://img.shields.io/github/license/aklkbqx/wol)](LICENSE)
 [![Go](https://img.shields.io/github/go-mod/go-version/aklkbqx/wol)](go.mod)
+[![Website](https://img.shields.io/badge/website-wol.aklkbqx.com-f5a524)](https://wol.aklkbqx.com)
 
-WOL wakes computers on your network with Wake-on-LAN magic packets, checks
-whether they came online, and opens a remote session when they do. It is a
-single executable for macOS, Linux and Windows with an interactive terminal UI
-(Wake Desk) and a scriptable CLI. The machine inventory is a local SQLite file;
-wake and inventory features need no web application, account or hosted service.
+Turn on a sleeping computer from another room, check that it answered, then
+open the remote app you already use. WOL is one executable for macOS, Linux
+and Windows with a terminal UI (Wake Desk) and a scriptable CLI. Your machine
+list is a local SQLite file. There is no account, server or background service.
 
-- Wake one machine, a site or a selection. Batch wakes run concurrently with
-  per-site limits, cancellation and retry of unsuccessful targets.
-- Wake through a router relay over SSH (`etherwake` on OpenWrt) when the target
-  sits behind another router or at another site.
-- Status checks combine TCP, ping and ARP, so machines that block ping still
-  report the right state.
-- Wake & Remote: wake if needed, then open RDP, SSH, VNC or Moonlight for a
-  Sunshine host.
-- LAN discovery, inventory import/export, JSON Lines output for scripts and a
-  checksum-verified `wol update`.
+**Website:** [wol.aklkbqx.com](https://wol.aklkbqx.com) walks through one wake
+with a real Wake Desk recording, in English and Thai.
 
 ```text
- wol  checked 05:27:04
+⚡ wol command center  v0.4.18  checked 21:51:54
+◆ machines   │     routes   │     activity   │     sites
 
- 3 machines  1 online  1 unreachable  1 unknown
-
- › windows     online    stream
-   private     unknown   stream
-   private2    unreachable    setup
- 192.168.50.200  00:11:22:33:44:55  LAN 192.168.50.255:9
-
-
- enter choose   w wake   c stream   s check   x stop   ? help   q quit
+╭─ ◆ FLEET ────────────────────────────────────────────────────╮ ╭─ ◆ INSPECTOR ─────────────────────────────────────╮
+│ 1 machines  0 online  1 unreachable  0 unknown               │ │ INSPECTOR                                         │
+│                                                              │ │ Sample desktop                                    │
+│ › Sample desktop        unreachable  setup                   │ │ unreachable  setup                                │
+│                                                              │ │ direct broadcast 198.51.100.255:9                 │
+│                                                              │ │ enter  wake or stream                             │
+│                                                              │ │ ────────────────────────                          │
+│                                                              │ │ IP   : 198.51.100.2                               │
+│                                                              │ │ Seen : unreachable                                │
+│                                                              │ │ MAC  : 02:00:00:00:00:01                          │
+│                                                              │ │ Route: broadcast 198.51.100.255:9                 │
+╰──────────────────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────────╯
+Checked 1/1 machines. Unreachable does not prove power is off.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+enter choose   space select   / search   ? help   q quit
 ```
 
-Power and wake readiness are intentionally separate: `UNREACHABLE + CONFIGURED` is the
-normal state for a machine that can be woken.
+<sub>Wake Desk v0.4.18 with a sample machine and documentation addresses.</sub>
+
+## What it does
+
+- **Wake** one machine, a whole site or a selection. Batch wakes run
+  concurrently with per-site limits, cancellation and retry of failed targets.
+- **Check** whether a machine is up. Status combines TCP, ping and ARP, so a
+  machine that blocks ping still reports correctly.
+- **Wake & Remote** wakes the machine if needed, waits for it, then opens RDP,
+  SSH, VNC or Moonlight (for a Sunshine host).
+- **Router relays** send the magic packet from an OpenWrt router over SSH
+  (`etherwake`) when the target sits behind another router or at another site.
+- **Shut down** a machine over SSH, now or on a schedule.
+- **Inventory tools**: LAN discovery, portable JSON import/export, JSON Lines
+  output for scripts, and a signature-checked `wol update`.
+
+A sleeping machine shows `unreachable`. That is the normal state before a wake,
+not an error: WOL reports power state and wake readiness separately.
 
 ## Install
 
-Download the archive for your operating system and architecture from
-[Releases](https://github.com/aklkbqx/wol/releases), verify its SHA256SUMS when
-provided, extract it, and place the executable on PATH. See the release notes
-for the platforms actually verified for that version.
+Download the archive for your system from
+[Releases](https://github.com/aklkbqx/wol/releases/latest), verify it against
+`SHA256SUMS`, extract it and put `wol` on your `PATH`. Each release lists the
+platforms that were actually tested.
 
-To build the development version, install Go 1.26.9 or newer, clone this repo,
-and run:
+Releases from v0.4.16 also ship `SHA256SUMS.sig`, an Ed25519 signature over the
+checksums. [Release signing](docs/release-signing.md) explains how to check it.
+
+To build from source you need Go 1.26.9 or newer:
 
 ```sh
+git clone https://github.com/aklkbqx/wol.git
+cd wol
 make verify
 make install BINDIR="$HOME/.local/bin"
 ```
 
-Add that directory to PATH if needed. `make install` uses the same native build
-and macOS packaging as `make build`. A plain `go install` does not perform those
-macOS packaging steps. Wake and inventory need no Docker or background service;
-optional browser remote sessions use Docker.
+Use `make install` rather than `go install` on macOS: it embeds the app bundle
+information that macOS needs to grant Local Network access.
 
-See [Homelab quick start](docs/homelab.md),
-[Troubleshooting](docs/troubleshooting.md), and
-[Development and release](docs/development.md).
+## Quick start
 
-## Use
-
-Run `wol` in a terminal to open Wake Desk. The first run creates a private
-local inventory automatically. Press `a` to add a machine or route.
-
-```bash
-wol                         # interactive Wake Desk
-wol wake --device windows   # wake a stored machine
-wol remote windows          # wake if needed, then open the native client (RDP/SSH/VNC) or Moonlight
-wol remote --browser windows  # use the localhost Guacamole session instead
-wol remote --no-wake windows  # require it online; never send a wake packet
-wol scan --add              # import new LAN neighbors into inventory
-wol remote configure --protocol rdp --host 192.168.50.200 --certificate strict windows
-wol remote clear windows    # remove the machine's remote profile
-wol remote doctor windows   # check the runtime and this target
-wol remote setup            # pull the pinned local remote containers
-wol status windows          # check its current power state
-wol wake AA:BB:CC:DD:EE:FF  # send directly to a MAC address
-wol export --output inventory.json
-wol import inventory.json
-wol update
-wol update --check
-wol version
+```sh
+wol                          # open Wake Desk; the first run creates the inventory
+wol scan --add               # add machines found on the LAN
+wol wake --device desktop    # wake a saved machine
+wol status desktop           # check whether it is up
+wol remote desktop           # wake if needed, then open its remote client
 ```
 
-`wol update` verifies the downloaded archive against the release's `SHA256SUMS`
-(or its exact versioned legacy checksums file) before installing. Missing,
-malformed or mismatched checksums leave the existing executable unchanged.
-Older releases without a checksums file require manual installation after
-verification. These checksums detect corruption. Releases from v0.4.16 also
-ship `SHA256SUMS.sig`, an Ed25519 signature over the manifest. To require it,
-save [the release public key](docs/wol-release-public.pem), check that its
-fingerprint is `ac3979581b0ada7f53a4309a2cfefa983283f62cf914f87b5aa0e8619607f1be`
-and run updates with `WOL_UPDATE_PUBLIC_KEY=/path/to/wol-release-public.pem`;
-see [release signing and trust setup](docs/release-signing.md). Releases through
-v0.4.15 are unsigned, so this option cannot install them.
-On macOS, a missing archive stops the update with instructions to use a release
-archive or `make install`, preserving the network-permission packaging.
+In Wake Desk, press `a` to add a machine and `Enter` on a machine to choose an
+action.
 
-`wol wake --device NAME --verify` waits for the configured TCP service after
-sending. A successful packet send means the packet was delivered; it does not
-claim the machine has finished booting.
+## Commands
 
-## Local remote sessions
+| Command | What it does |
+| --- | --- |
+| `wol` / `wol tui` | Open Wake Desk |
+| `wol wake` | Wake a saved machine (`--device NAME`) or a MAC address |
+| `wol batch check\|wake` | Check or wake `--site NAME`, `--all` or listed machines |
+| `wol status NAME` | Check a saved machine's power state |
+| `wol scan` | Discover LAN neighbors; `--add` imports new hosts |
+| `wol remote NAME` | Wake if needed, then open RDP, SSH, VNC or Moonlight |
+| `wol shutdown NAME` | Shut a machine down over SSH, now or with `--delay` |
+| `wol import FILE` / `wol export` | Move the inventory as portable JSON |
+| `wol doctor` | Check the local wake toolchain |
+| `wol update` | Install the latest release after verifying it |
+| `wol version` | Print the version |
 
-Remote access is an optional local companion to Wake-on-LAN, not an external
-website. A remote profile stores only the connection protocol, host, ports,
-mode, certificate policy, and optional username/domain hints. It never stores a
-hosted remote URL or a password.
+Useful flags:
 
-Configure a machine for RDP, VNC, or SSH:
+- `wol wake --verify` waits for the machine's TCP verification port after
+  sending. A sent packet only means it left your computer; `--verify` tells
+  you the machine actually came up.
+- `wol wake --router HOST` relays the packet through an SSH router.
+- `wol batch ... --json` prints one JSON result per line for scripts;
+  `--yes --no-input` runs without prompts.
+- `wol shutdown cancel NAME` aborts a scheduled shutdown;
+  `wol shutdown configure NAME` stores the SSH user, key and platform.
 
-```bash
-wol remote configure --protocol rdp --host 192.168.50.200 --port 3389 --certificate trust-local windows
-wol remote configure --protocol ssh --host 192.168.50.5 --port 22 private
-wol remote doctor windows
-wol remote setup
+Run any command with `-h` for its full flag list.
+
+## Wake Desk keys
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, arrows | Move |
+| `Enter` | Open the action picker (never starts an action by itself) |
+| `w` | Wake only |
+| `c` | Wake if needed, then open the remote client |
+| `s` | Check the selected machine |
+| `n` | Discover LAN neighbors |
+| `f` | Force-wake a disabled machine |
+| `a` / `e` / `d` | Add, edit, delete |
+| `1`–`4` | Machines, routes, activity, sites |
+| `[` / `]`, `v` | Cycle the site filter, cycle the status filter |
+| `Space`, `S` / `W` | Select machines, then review a batch check / wake |
+| `R` | Retry the failed targets of a batch |
+| `i` / `E` | Import / export the inventory |
+| `/`, `?`, `q` | Filter, help, quit |
+
+`Esc` cancels a running check or batch. The layout adapts to narrow, compact
+and wide terminals.
+
+Display options:
+
+| Variable | Effect |
+| --- | --- |
+| `WOL_TUI_REDACT=1` | Hide machine names, IP and MAC addresses on screen |
+| `WOL_TUI_REDUCED_MOTION=1` or `WOL_TUI_MOTION=off` | Turn off animation |
+| `WOL_TUI_ASCII=1` | Use ASCII glyphs |
+| `NO_COLOR=1` | Turn off color |
+
+`WOL_TUI_REDACT` only changes what is shown. Wakes, exports and logs still use
+the real values.
+
+## Remote sessions
+
+A remote profile stores the protocol, host, ports, certificate policy and an
+optional user or domain. It never stores a password.
+
+```sh
+wol remote configure --protocol rdp --host 198.51.100.2 --certificate strict desktop
+wol remote desktop             # native RDP, SSH or VNC client, or Moonlight
+wol remote --no-wake desktop   # require it online; never send a wake packet
+wol remote doctor desktop      # check the runtime and this target
+wol remote clear desktop       # delete the profile, keep the machine
 ```
 
-The full profile command is:
-
-```text
-wol remote configure [--db path] [--protocol rdp|vnc|ssh] [--host HOST] [--port N] [--verify-port N] [--username USER] [--domain DOMAIN] [--certificate strict|trust-local] <machine>
-```
-
-`wol remote NAME` checks the machine, wakes it when necessary, and opens the
-native RDP, SSH, or VNC client registered on this computer. Sunshine profiles
-launch Moonlight. Install a client that handles the selected protocol first;
-native clients manage their own credentials and certificate settings.
-
-`wol remote pair NAME` pairs with Moonlight when it is installed. Without
-Moonlight, `--pin` pairs through the Sunshine admin API using `SUNSHINE_USER`
-and `SUNSHINE_PASS`, or a password prompt. Sunshine normally serves a
-self-signed certificate, so WOL refuses it and prints its SHA-256 without
-sending credentials. Compare that value on the Sunshine machine (for example
-`openssl x509 -in credentials/cacert.pem -noout -fingerprint -sha256` in
-Sunshine's config directory), then rerun with `--tls-fingerprint VALUE` or
-`SUNSHINE_TLS_FINGERPRINT`. Avoid `--pass`: arguments appear in process lists.
-
-`wol remote --browser NAME` opens RDP, SSH, or VNC through an ephemeral browser
-session on `127.0.0.1` using pinned Apache Guacamole
-containers, and opens a one-time localhost sign-in. Credentials are accepted
-by that loopback session only, encrypted into a short-lived launch token, and
-never written to SQLite, exports, command arguments, or logs. The listener is
-not exposed to the LAN or internet and stops with the CLI session. Docker is required only
-for this browser-based remote flow. Run `wol remote doctor` for a read-only
-check; `wol remote doctor NAME` also checks the selected profile and service.
-`wol remote setup` downloads the required pinned images. For browser sessions, the default RDP
-certificate policy is `strict`; use `trust-local` only for a private machine
-whose self-signed RDP certificate you explicitly trust.
-
-Use `wol remote --no-wake NAME` when the target must already be online and the
-command must not send a wake packet.
-
-Use `wol remote clear NAME` to delete a profile without changing the machine or
-wake configuration. WOL never sends this remote flow to a hosted endpoint.
-
-## Wake Desk controls
-
-- `j/k` or arrows: move
-- `Enter`: open the action picker; it never starts an action immediately
-- `w`: wake only
-- `c`: wake if needed, then open the native remote client or Moonlight
-- `s`: check selected machine
-- `n`: discover LAN neighbors and add new hosts
-- `f`: force wake a disabled machine
-- `a/e/d`: add, edit, delete
-- `1/2/3/4`: machines, routes, activity, sites
-- `[` / `]`: cycle site filter; `v`: cycle status filter
-- `Space`: select machines; `S` / `W`: review batch check / wake
-- `R`: retry unsuccessful batch targets
-- `i` / `E`: import / export inventory; `Ctrl+S`: save a form
-- `/`: filter
-- `?`: help
-- `q`: quit
-
-The action picker always presents **Wake only** and **Wake & Remote** as
-separate choices. The latter is disabled until the selected machine has a
-valid remote profile. The interface adapts to narrow, compact, and wide
-terminals. Inventory appears as soon as it is read. Startup and refresh checks update
-machines incrementally while navigation remains available. A failed inventory
-refresh preserves the previous data. `Esc` cancels a check or batch; obsolete
-results are ignored. Motion is
-limited to active work such as verification, wake, or local remote startup.
-Use `WOL_TUI_REDUCED_MOTION=1` or `WOL_TUI_MOTION=off` to disable it,
-`WOL_TUI_ASCII=1` for ASCII glyphs, and `NO_COLOR=1` to disable color.
-
-## Inventory and privacy
-
-Set `WOL_TUI_REDACT=1` before opening Wake Desk to hide machine and network
-identifiers in the terminal, including form values and diagnostic details.
-Power and action indicators remain visible. This only changes TUI presentation:
-inventory, exports, logs and the network values used by actions are unchanged.
-Turn it off when you need to inspect connection details or edit values visibly.
-
-Inventory is stored locally in SQLite. Wake Desk never displays its filesystem
-path. Set `WOL_DATA_DIR` to choose a data directory or `WOL_DB` to select an
-explicit database for automation.
-
-Portable exports contain sites, machines, remote connection profiles, groups,
-and wake relay routes. They exclude passwords, session tokens, wake history,
-and any unrelated tables that may exist in an older database. Export files are
-created with owner-only permissions.
+- **Moonlight / Sunshine:** `wol remote pair NAME` pairs through Moonlight. With
+  `--pin` it uses the Sunshine admin API instead (`SUNSHINE_USER`,
+  `SUNSHINE_PASS` or a prompt). WOL refuses Sunshine's self-signed certificate
+  until you confirm its SHA-256 with `--tls-fingerprint` or
+  `SUNSHINE_TLS_FINGERPRINT`.
+- **Browser session:** `wol remote --browser NAME` opens RDP, SSH or VNC in your
+  browser through pinned Apache Guacamole containers bound to `127.0.0.1`. This
+  is the only feature that needs Docker; run `wol remote setup` once to pull the
+  images. Credentials stay in that short-lived local session and are never
+  written to disk, exports or logs.
 
 ## Router relays
 
-Wake Desk can call `etherwake` through a non-interactive SSH connection. Add a
-route from the Routes view, then assign that route to a machine. SSH targets,
-users, ports, interfaces, and MAC addresses are validated before execution.
+Add a route in the Routes view (`2`), then assign it to a machine. WOL runs
+`etherwake` on the router over a non-interactive SSH connection, after
+validating the SSH target, user, port, interface and MAC address.
 
-## Development
+## Your data
 
-```bash
-make test
-make check
-make build
+- The inventory is a local SQLite file. Set `WOL_DATA_DIR` to choose its
+  directory or `WOL_DB` to point at a specific database.
+- Exports contain sites, machines, remote profiles, groups and relay routes.
+  They never contain passwords, session tokens or wake history, and they are
+  created readable by you only.
+- `wol update` installs only a release whose archive matches `SHA256SUMS`. Set
+  `WOL_UPDATE_PUBLIC_KEY` to also require a valid signature
+  ([details](docs/release-signing.md)).
+
+## Documentation
+
+- [Homelab quick start](docs/homelab.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Release signing and trust](docs/release-signing.md)
+- [Development and releases](docs/development.md)
+- [How work is tracked on GitHub](docs/github-workflow.md)
+- [Changelog](docs/CHANGELOG.md)
+
+## Contributing
+
+The most useful help right now is the
+[first-user test](docs/first-user-test.md): about 30 minutes on your own
+machines, reporting anything unclear. Bugs and ideas go to
+[Issues](https://github.com/aklkbqx/wol/issues); see
+[CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+
+```sh
+make verify    # race tests, vet, native build, whitespace check
 ```
 
-New to WOL? The [first-user test](docs/first-user-test.md) takes about 30
-minutes and is the most useful help right now.
+WOL is deliberately CLI-first. The optional browser remote is a temporary
+localhost runtime; hosted services and infrastructure code stay out of this
+repository.
 
-The public project is deliberately CLI-first. Its optional browser remote is a
-temporary localhost runtime; private hosted web, authentication, deployment,
-and infrastructure code do not belong in this repository.
-
-Licensed under Apache-2.0. Credit: aklkbqx.
+Licensed under [Apache-2.0](LICENSE). Made by aklkbqx.
