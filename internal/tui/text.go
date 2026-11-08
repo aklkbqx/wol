@@ -6,7 +6,11 @@ import "strings"
 // assertions. Wake Desk labels are generated internally, so a conservative
 // parser is preferable to trying to interpret arbitrary control sequences.
 func stripANSI(value string) string {
+	if strings.IndexByte(value, '\033') == -1 {
+		return value
+	}
 	var builder strings.Builder
+	builder.Grow(len(value))
 	inEscape := false
 	for i := 0; i < len(value); i++ {
 		if value[i] == '\033' {

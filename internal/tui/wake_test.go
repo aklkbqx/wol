@@ -1075,3 +1075,48 @@ func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
 		t.Fatalf("expected fleet summary to count 1 unreachable, got:\n%s", offlineView)
 	}
 }
+
+func BenchmarkWakeModelView(b *testing.B) {
+	model := NewWakeModel(nil, "0.4.19-dev", "aklkbqx")
+	model.width = 120
+	model.height = 36
+	model.phase = phaseReady
+	model.sites = []store.Site{
+		{ID: "site-1", Name: "homelab", BroadcastAddress: "192.168.1.255", DefaultPort: 9},
+		{ID: "site-2", Name: "office", BroadcastAddress: "10.0.10.255", DefaultPort: 9},
+	}
+	model.relays = []store.WakeRelay{
+		{ID: "relay-1", Name: "edge-router", Address: "192.168.1.1", Port: 22, Enabled: true},
+	}
+	for i := 0; i < 30; i++ {
+		id := fmt.Sprintf("dev-%02d", i)
+		siteID := "site-1"
+		if i%2 == 1 {
+			siteID = "site-2"
+		}
+		model.devices = append(model.devices, store.Device{
+			ID:               id,
+			Name:             fmt.Sprintf("workstation-%02d", i),
+			MACAddress:       fmt.Sprintf("02:00:00:00:03:%02x", i),
+			IPAddress:        fmt.Sprintf("192.168.1.%d", 10+i),
+			BroadcastAddress: "192.168.1.255",
+			Port:             9,
+			SiteID:           siteID,
+			Enabled:          true,
+		})
+		if i%3 == 0 {
+			model.presence[id] = "online"
+		} else if i%3 == 1 {
+			model.presence[id] = "offline"
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		out := model.View()
+		if len(out) == 0 {
+			b.Fatal("empty view")
+		}
+	}
+}

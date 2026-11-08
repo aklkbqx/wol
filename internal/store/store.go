@@ -96,6 +96,11 @@ type ExportData struct {
 	PowerProfiles  []PowerProfile  `json:"powerProfiles,omitempty"`
 }
 
+const (
+	maxWakeAttempts  = 500
+	maxPowerAttempts = 500
+)
+
 func sqliteDSN(path string) string {
 	if path == ":memory:" || strings.Contains(path, "?") {
 		return path
@@ -103,13 +108,43 @@ func sqliteDSN(path string) string {
 	return path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 }
 
+func sqliteFilePath(path string) string {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" || trimmed == ":memory:" || strings.HasPrefix(trimmed, "file::memory:") {
+		return ""
+	}
+	if idx := strings.Index(trimmed, "?"); idx >= 0 {
+		query := strings.ToLower(trimmed[idx+1:])
+		for _, param := range strings.Split(query, "&") {
+			if param == "mode=memory" {
+				return ""
+			}
+		}
+		trimmed = trimmed[:idx]
+	}
+	if strings.HasPrefix(trimmed, "file://localhost/") {
+		trimmed = strings.TrimPrefix(trimmed, "file://localhost")
+	} else if strings.HasPrefix(trimmed, "file:///") {
+		trimmed = strings.TrimPrefix(trimmed, "file://")
+	} else {
+		trimmed = strings.TrimPrefix(trimmed, "file:")
+	}
+	if trimmed == "" || trimmed == ":memory:" {
+		return ""
+	}
+	return filepath.Clean(trimmed)
+}
+
 func Open(path string) (*Store, error) {
 	if strings.TrimSpace(path) == "" {
 		path = DefaultDatabasePath()
 	}
-	if dir := filepath.Dir(path); dir != "." && dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("create database directory %q: %w", dir, err)
+	clean := sqliteFilePath(path)
+	if clean != "" {
+		if dir := filepath.Dir(clean); dir != "." && dir != "" {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				return nil, fmt.Errorf("create database directory %q: %w", dir, err)
+			}
 		}
 	}
 	db, err := sql.Open("sqlite", sqliteDSN(path))
@@ -121,6 +156,18 @@ func Open(path string) (*Store, error) {
 	if err := store.migrate(context.Background()); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if clean != "" {
+		if err := os.Chmod(clean, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+			_ = db.Close()
+			return nil, fmt.Errorf("secure database file %q: %w", clean, err)
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if err := os.Chmod(clean+suffix, 0o600); err != nil && !errors.Is(err, os.ErrNotExist) {
+				_ = db.Close()
+				return nil, fmt.Errorf("secure database journal %q: %w", clean+suffix, err)
+			}
+		}
 	}
 	return store, nil
 }
@@ -175,6 +222,7 @@ CREATE TABLE IF NOT EXISTS group_members (
   FOREIGN KEY (group_id) REFERENCES groups_table(id) ON DELETE CASCADE,
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
 );
+CREATE INDEX IF NOT EXISTS group_members_order_idx ON group_members(group_id, position, device_id);
 CREATE TABLE IF NOT EXISTS wake_attempts (
   id TEXT PRIMARY KEY,
   target_type TEXT NOT NULL,
@@ -283,7 +331,16 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	if err := s.dropLegacyRemoteURL(ctx); err != nil {
 		return err
 	}
-	return s.migrateRemoteProfiles(ctx)
+	if err := s.migrateRemoteProfiles(ctx); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM wake_attempts WHERE id IN (SELECT id FROM wake_attempts ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?)`, maxWakeAttempts); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM power_attempts WHERE id IN (SELECT id FROM power_attempts ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?)`, maxPowerAttempts); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) dropLegacyRemoteURL(ctx context.Context) error {
@@ -622,12 +679,15 @@ func (s *Store) ListGroups(ctx context.Context) ([]Group, error) {
 		return nil, err
 	}
 	groups := make([]Group, 0)
+	indexByID := make(map[string]int)
 	for rows.Next() {
 		var item Group
 		if err := rows.Scan(&item.ID, &item.Name, &item.Description, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
+		item.DeviceIDs = make([]string, 0)
+		indexByID[item.ID] = len(groups)
 		groups = append(groups, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -635,16 +695,29 @@ func (s *Store) ListGroups(ctx context.Context) ([]Group, error) {
 		return nil, err
 	}
 	// SQLite is intentionally configured with one open connection. Close the
-	// parent result set before loading each group's members, otherwise the
-	// nested query waits forever for the only available connection.
+	// parent result set before loading group members in a single batch query.
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	for index := range groups {
-		groups[index].DeviceIDs, err = s.groupDeviceIDs(ctx, groups[index].ID)
-		if err != nil {
+	if len(groups) == 0 {
+		return groups, nil
+	}
+	memberRows, err := s.db.QueryContext(ctx, `SELECT group_id, device_id FROM group_members ORDER BY group_id, position, device_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer memberRows.Close()
+	for memberRows.Next() {
+		var groupID, deviceID string
+		if err := memberRows.Scan(&groupID, &deviceID); err != nil {
 			return nil, err
 		}
+		if idx, ok := indexByID[groupID]; ok {
+			groups[idx].DeviceIDs = append(groups[idx].DeviceIDs, deviceID)
+		}
+	}
+	if err := memberRows.Err(); err != nil {
+		return nil, err
 	}
 	return groups, nil
 }
@@ -770,15 +843,20 @@ func (s *Store) RecordWakeAttempt(ctx context.Context, item WakeAttempt) (WakeAt
 	if item.CreatedAt == "" {
 		item.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO wake_attempts (id, target_type, target_id, target_name, mac_address, destination, port, packet_status, verification_status, message, packets, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.TargetType, item.TargetID, item.TargetName, item.MACAddress, item.Destination, item.Port, item.PacketStatus, item.VerificationStatus, item.Message, item.Packets, item.CreatedAt)
-	return item, normalizeDBError(err)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO wake_attempts (id, target_type, target_id, target_name, mac_address, destination, port, packet_status, verification_status, message, packets, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, item.TargetType, item.TargetID, item.TargetName, item.MACAddress, item.Destination, item.Port, item.PacketStatus, item.VerificationStatus, item.Message, item.Packets, item.CreatedAt); err != nil {
+		return WakeAttempt{}, normalizeDBError(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM wake_attempts WHERE id IN (SELECT id FROM wake_attempts ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?)`, maxWakeAttempts); err != nil {
+		return WakeAttempt{}, normalizeDBError(err)
+	}
+	return item, nil
 }
 
 func (s *Store) ListWakeAttempts(ctx context.Context, limit int) ([]WakeAttempt, error) {
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 || limit > maxWakeAttempts {
 		limit = 100
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, target_type, target_id, target_name, mac_address, destination, port, packet_status, verification_status, message, packets, created_at FROM wake_attempts ORDER BY created_at DESC LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, target_type, target_id, target_name, mac_address, destination, port, packet_status, verification_status, message, packets, created_at FROM wake_attempts ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}

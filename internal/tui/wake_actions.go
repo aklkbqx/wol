@@ -30,7 +30,7 @@ func (m *WakeModel) beginWake(force bool) tea.Cmd {
 	m.action = "wake"
 	m.status = fmt.Sprintf("Sending wake packet to %s...", device.Name)
 	motionCmd := m.triggerMotion(StageSignal, 800*time.Millisecond, 0, 0)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.baseContext())
 	m.actionContext = ctx
 	m.actionCancel = cancel
 	wakeCmd := func() tea.Msg {
@@ -80,7 +80,7 @@ func (m *WakeModel) beginWakeAndRemote() tea.Cmd {
 		m.status = "Wake & remote. Esc cancels."
 	}
 	motionCmd := m.triggerMotion(StageSignal, 95*time.Second, 0, 0)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(m.baseContext())
 	m.actionContext = ctx
 	m.actionCancel = cancel
 	openCmd := func() tea.Msg {
@@ -152,7 +152,7 @@ func (m *WakeModel) verifyWake(operationID uint64, device store.Device) tea.Cmd 
 	}
 	parent := m.actionContext
 	if parent == nil {
-		parent = context.Background()
+		parent = m.baseContext()
 	}
 	detector := m.presenceDetector()
 	return func() tea.Msg {
@@ -162,10 +162,12 @@ func (m *WakeModel) verifyWake(operationID uint64, device store.Device) tea.Cmd 
 		for attempt := 0; ; attempt++ {
 			delay := delays[min(attempt, len(delays)-1)]
 			if delay > 0 {
+				timer := time.NewTimer(delay)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return wakeVerifyMsg{operationID: operationID, targetID: targetID, targetName: targetName, status: "timeout"}
-				case <-time.After(delay):
+				case <-timer.C:
 				}
 			}
 			result := detector.Probe(ctx, presence.Target{DeviceID: targetID, IPAddress: device.IPAddress, VerifyPort: port}, 1500*time.Millisecond)
@@ -187,7 +189,7 @@ func (m *WakeModel) verifyShutdown(operationID uint64, device store.Device) tea.
 	}
 	parent := m.actionContext
 	if parent == nil {
-		parent = context.Background()
+		parent = m.baseContext()
 	}
 	detector := m.presenceDetector()
 	return func() tea.Msg {
@@ -196,10 +198,12 @@ func (m *WakeModel) verifyShutdown(operationID uint64, device store.Device) tea.
 		delays := []time.Duration{time.Second, 2 * time.Second, 2 * time.Second, 3 * time.Second, 4 * time.Second, 5 * time.Second}
 		for attempt := 0; ; attempt++ {
 			delay := delays[min(attempt, len(delays)-1)]
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return shutdownVerifyMsg{operationID: operationID, targetID: targetID, targetName: targetName, status: "timeout"}
-			case <-time.After(delay):
+			case <-timer.C:
 			}
 			result := detector.Probe(ctx, presence.Target{DeviceID: targetID, IPAddress: device.IPAddress, VerifyPort: port}, 1500*time.Millisecond)
 			if result.Status == presence.StatusOffline {

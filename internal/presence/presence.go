@@ -10,9 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
+
+const maxSweepTCPConcurrency = 8
 
 type Status string
 
@@ -402,62 +405,71 @@ func (d *Detector) probeTCP(ctx context.Context, host string, port int, timeout 
 }
 
 func (d *Detector) sweepTCP(ctx context.Context, host string, ports []int, timeout time.Duration) (hit bool, allUnreachable bool, attempted bool) {
-	if len(ports) == 0 {
+	if len(ports) == 0 || ctx.Err() != nil {
 		return false, false, false
 	}
+	if len(ports) == 1 {
+		res := d.probeTCP(ctx, host, ports[0], timeout)
+		if res.Online {
+			return true, false, true
+		}
+		return false, res.Unreachable, true
+	}
+
 	sweepCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	resultChan := make(chan tcpProbeResult, len(ports))
-	var wg sync.WaitGroup
+	workers := len(ports)
+	if workers > maxSweepTCPConcurrency {
+		workers = maxSweepTCPConcurrency
+	}
 
-	for _, port := range ports {
-		wg.Add(1)
-		go func(p int) {
-			defer wg.Done()
-			select {
-			case <-sweepCtx.Done():
+	var nextIdx atomic.Int32
+	var hitCount atomic.Int32
+	var finishedCount atomic.Int32
+	var unreachableCount atomic.Int32
+
+	workerFn := func() {
+		for {
+			idx := int(nextIdx.Add(1) - 1)
+			if idx >= len(ports) || sweepCtx.Err() != nil {
 				return
-			default:
 			}
-			res := d.probeTCP(sweepCtx, host, p, timeout)
+			res := d.probeTCP(sweepCtx, host, ports[idx], timeout)
 			if res.Online {
+				finishedCount.Add(1)
+				hitCount.Add(1)
 				cancel()
+				return
 			}
-			select {
-			case resultChan <- res:
-			case <-sweepCtx.Done():
-				if res.Online {
-					select {
-					case resultChan <- res:
-					default:
-					}
-				}
+			if res.Unreachable {
+				finishedCount.Add(1)
+				unreachableCount.Add(1)
+				continue
 			}
-		}(port)
-	}
-
-	go func() {
-		wg.Wait()
-		close(resultChan)
-	}()
-
-	finished := 0
-	unreachable := 0
-	for res := range resultChan {
-		attempted = true
-		finished++
-		if res.Online {
-			hit = true
-		}
-		if res.Unreachable {
-			unreachable++
+			if sweepCtx.Err() == nil {
+				finishedCount.Add(1)
+			}
 		}
 	}
-	if hit {
+
+	var wg sync.WaitGroup
+	wg.Add(workers - 1)
+	for i := 0; i < workers-1; i++ {
+		go func() {
+			defer wg.Done()
+			workerFn()
+		}()
+	}
+	workerFn()
+	wg.Wait()
+
+	if hitCount.Load() > 0 {
 		return true, false, true
 	}
-	allUnreachable = attempted && finished > 0 && unreachable == finished
+	finished := int(finishedCount.Load())
+	attempted = finished > 0
+	allUnreachable = attempted && int(unreachableCount.Load()) == finished
 	return false, allUnreachable, attempted
 }
 

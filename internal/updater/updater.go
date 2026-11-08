@@ -107,7 +107,7 @@ func NewClient(currentVersion string, opts ...Option) *Client {
 	c := &Client{
 		CurrentVersion: currentVersion,
 		Repo:           DefaultRepo,
-		HTTPClient:     &http.Client{},
+		HTTPClient:     &http.Client{Timeout: DefaultTimeout},
 		BaseAPIURL:     "https://api.github.com",
 		BaseWebURL:     "https://github.com",
 		publicKeyFile:  strings.TrimSpace(os.Getenv("WOL_UPDATE_PUBLIC_KEY")),

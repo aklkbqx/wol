@@ -179,6 +179,9 @@ func (s *Store) RecordPowerAttempt(ctx context.Context, item PowerAttempt) (Powe
 	if err != nil {
 		return PowerAttempt{}, normalizeDBError(err)
 	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM power_attempts WHERE id IN (SELECT id FROM power_attempts ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?)`, maxPowerAttempts); err != nil {
+		return PowerAttempt{}, normalizeDBError(err)
+	}
 	return item, nil
 }
 
@@ -187,7 +190,10 @@ func (s *Store) ListPowerAttempts(ctx context.Context, limit int) ([]PowerAttemp
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, device_id, device_name, action, delay_seconds, status, message, created_at FROM power_attempts ORDER BY created_at DESC LIMIT ?`, limit)
+	if limit > maxPowerAttempts {
+		limit = maxPowerAttempts
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, device_id, device_name, action, delay_seconds, status, message, created_at FROM power_attempts ORDER BY created_at DESC, id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}

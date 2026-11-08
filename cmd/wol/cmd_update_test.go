@@ -8,7 +8,24 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/aklkbqx/wol/internal/updater"
 )
+
+func withMockUpdateServer(t *testing.T, serverURL string) {
+	t.Helper()
+	orig := newUpdateClient
+	newUpdateClient = func(currentVersion string, opts ...updater.Option) *updater.Client {
+		allOpts := append([]updater.Option{
+			updater.WithBaseAPIURL(serverURL),
+			updater.WithBaseWebURL(serverURL),
+		}, opts...)
+		return updater.NewClient(currentVersion, allOpts...)
+	}
+	t.Cleanup(func() {
+		newUpdateClient = orig
+	})
+}
 
 func TestRunUpdateInvalidFlag(t *testing.T) {
 	code := runUpdate([]string{"--nonexistent-flag"})
@@ -35,6 +52,7 @@ func TestRunUpdateCheckUpToDate(t *testing.T) {
 		}`))
 	}))
 	defer server.Close()
+	withMockUpdateServer(t, server.URL)
 
 	// Redirect stdout to capture output
 	origStdout := os.Stdout
@@ -58,5 +76,35 @@ func TestRunUpdateCheckUpToDate(t *testing.T) {
 	}
 	if !strings.Contains(output, "up to date") {
 		t.Errorf("expected output to mention 'up to date', got: %s", output)
+	}
+}
+
+func TestRunUpdateCheckAvailableAndAlreadyUpToDateInstall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "/tags/v") {
+			_, _ = w.Write([]byte(`{
+				"tag_name": "v` + appVersion + `",
+				"name": "WOL v` + appVersion + `",
+				"html_url": "https://github.com/aklkbqx/wol/releases/tag/v` + appVersion + `",
+				"assets": []
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"tag_name": "v99.0.0",
+			"name": "WOL v99.0.0",
+			"html_url": "https://github.com/aklkbqx/wol/releases/tag/v99.0.0",
+			"assets": []
+		}`))
+	}))
+	defer server.Close()
+	withMockUpdateServer(t, server.URL)
+
+	if code := runUpdate([]string{"--check"}); code != 0 {
+		t.Fatalf("runUpdate --check (update available) code = %d, want 0", code)
+	}
+	if code := runUpdate([]string{"--version", "v" + appVersion}); code != 0 {
+		t.Fatalf("runUpdate --version current code = %d, want 0", code)
 	}
 }

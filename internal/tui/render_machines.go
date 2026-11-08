@@ -49,16 +49,17 @@ func (m *WakeModel) renderMachines(width int, mode LayoutMode) string {
 
 func (m *WakeModel) renderMachineList(devices []store.Device, width int) string {
 	rowWidth := max(1, width)
-	online, offline, unknown, _, _, _, _ := m.machineSummary(devices)
-	rows := []string{
+	online, offline, unknown := m.machineSummary(devices)
+	visible, start := m.machineViewport(devices, width)
+	rows := make([]string, 0, len(visible)+6)
+	rows = append(rows,
 		m.theme.muted().Render(fitText(fmt.Sprintf("%d machines  %d online  %d unreachable  %d unknown", len(devices), online, offline, unknown), rowWidth)),
 		"",
-	}
+	)
 	if len(devices) == 0 {
 		rows = append(rows, fitText("No machines. n discover · a add · i import", rowWidth))
 		return strings.Join(rows, "\n")
 	}
-	visible, start := m.machineViewport(devices, width)
 	if start > 0 {
 		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("%d above", start)))
 	}
@@ -69,6 +70,8 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 	if width < 28 {
 		nameWidth = max(8, width-10)
 	}
+	now := time.Now()
+	motionSelectActive := m.motion.Active(now) && m.motion.Stage == StageSelect
 	for i, device := range visible {
 		globalIndex := start + i
 		highlighted := globalIndex == m.selected
@@ -76,8 +79,7 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 			highlighted = device.ID == m.actionTargetID
 		}
 		marker := " "
-		now := time.Now()
-		if m.motion.Active(now) && m.motion.Stage == StageSelect && globalIndex == m.motion.Origin {
+		if motionSelectActive && globalIndex == m.motion.Origin {
 			marker = m.theme.accent().Render(m.theme.Glyph("afterimage"))
 		}
 		if highlighted {
@@ -86,13 +88,14 @@ func (m *WakeModel) renderMachineList(devices []store.Device, width int) string 
 		if m.marked[device.ID] {
 			marker = "*"
 		}
-		power := powerWord(m.deviceState(device))
+		devState := m.deviceState(device)
+		power := powerWord(devState)
 		action := m.actionWord(device)
 		name := padVisible(fitText(m.privateField(device.Name), nameWidth), nameWidth)
 		if highlighted {
 			name = m.theme.accent().Render(name)
 		}
-		powerStyled := stateStyle(m.theme, m.deviceState(device)).Render(padVisible(power, 11))
+		powerStyled := stateStyle(m.theme, devState).Render(padVisible(power, 11))
 		actionStyled := stateStyle(m.theme, actionState(action)).Render(action)
 		if (m.waking || m.opening || m.shuttingDown) && device.ID == m.actionTargetID {
 			spinner := "●"

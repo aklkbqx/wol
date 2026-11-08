@@ -25,9 +25,29 @@ func ResolveLayout(width, height int) LayoutMode {
 	return LayoutNarrow
 }
 
+func isPlainASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func visibleWidth(text string) int {
+	if isPlainASCII(text) {
+		return len(text)
+	}
+	return lipgloss.Width(text)
+}
+
 func padVisible(text string, width int) string {
 	text = fitText(text, width)
-	return text + strings.Repeat(" ", max(0, width-lipgloss.Width(text)))
+	w := visibleWidth(text)
+	if w >= width {
+		return text
+	}
+	return text + strings.Repeat(" ", width-w)
 }
 
 func contentWidth(width int) int {
@@ -54,7 +74,7 @@ func fitText(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if lipgloss.Width(text) <= width {
+	if visibleWidth(text) <= width {
 		return text
 	}
 	return truncateANSI(text, width)

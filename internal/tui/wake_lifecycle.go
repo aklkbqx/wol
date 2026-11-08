@@ -30,7 +30,7 @@ func (m *WakeModel) beginRefresh(kind loadingKind) tea.Cmd {
 	}
 	m.status = "Reading local inventory..."
 	motionCmd := m.triggerMotion(StageSignal, 15*time.Second, 0, 0)
-	m.loadContext, m.loadCancel = context.WithCancel(context.Background())
+	m.loadContext, m.loadCancel = context.WithCancel(m.baseContext())
 	return tea.Batch(m.loadData(m.loadContext, m.requestID, kind), motionCmd)
 }
 

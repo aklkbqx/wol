@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -617,5 +619,227 @@ func TestDeleteGroupKeepsMachines(t *testing.T) {
 	}
 	if err := repository.DeleteGroup(ctx, group.ID); err != ErrNotFound {
 		t.Fatalf("second delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestOpenSetsDatabaseFileMode0600(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file mode check skipped on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "nested", "wol.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	repository, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("database file perm = %04o, want 0600", got)
+	}
+
+	uriTarget := filepath.Join(t.TempDir(), "uri-sub", "wol.db")
+	uriRepo, err := Open("file:" + uriTarget + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatalf("Open(file: URI with query): %v", err)
+	}
+	defer uriRepo.Close()
+	uriInfo, err := os.Stat(uriTarget)
+	if err != nil {
+		t.Fatalf("stat URI database file: %v", err)
+	}
+	if got := uriInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("URI database file perm = %04o, want 0600", got)
+	}
+	if _, err := os.Stat("file:"); !os.IsNotExist(err) {
+		t.Fatalf("Open(file:...) polluted working directory with 'file:' dir: err=%v", err)
+	}
+
+	if got := sqliteFilePath("file:memdb1?mode=memory&cache=shared"); got != "" {
+		t.Fatalf("sqliteFilePath(mode=memory) = %q, want empty", got)
+	}
+}
+
+func TestWakeAndPowerAttemptsRetention(t *testing.T) {
+	repository, err := Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	ctx := t.Context()
+
+	device, err := repository.CreateDevice(ctx, Device{
+		Name:       "retention-host",
+		MACAddress: "02:00:00:00:00:aa",
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	totalInserted := 525
+	for i := 0; i < totalInserted; i++ {
+		ts := baseTime.Add(time.Duration(i) * time.Second).Format(time.RFC3339Nano)
+		if _, err := repository.RecordWakeAttempt(ctx, WakeAttempt{
+			TargetType:         "device",
+			TargetID:           device.ID,
+			TargetName:         device.Name,
+			MACAddress:         device.MACAddress,
+			Destination:        "255.255.255.255",
+			Port:               9,
+			PacketStatus:       "sent",
+			VerificationStatus: "skipped",
+			Message:            fmt.Sprintf("wake-%03d", i),
+			Packets:            1,
+			CreatedAt:          ts,
+		}); err != nil {
+			t.Fatalf("record wake attempt %d: %v", i, err)
+		}
+		if _, err := repository.RecordPowerAttempt(ctx, PowerAttempt{
+			DeviceID:     device.ID,
+			DeviceName:   device.Name,
+			Action:       "shutdown",
+			DelaySeconds: 0,
+			Status:       "sent",
+			Message:      fmt.Sprintf("power-%03d", i),
+			CreatedAt:    ts,
+		}); err != nil {
+			t.Fatalf("record power attempt %d: %v", i, err)
+		}
+	}
+
+	var wakeCount int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM wake_attempts`).Scan(&wakeCount); err != nil {
+		t.Fatal(err)
+	}
+	if wakeCount != 500 {
+		t.Fatalf("wake_attempts count = %d, want 500", wakeCount)
+	}
+	wakes, err := repository.ListWakeAttempts(ctx, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wakes) != 500 || wakes[0].Message != "wake-524" || wakes[len(wakes)-1].Message != "wake-025" {
+		t.Fatalf("unexpected wake attempts bounds: first=%q last=%q len=%d", wakes[0].Message, wakes[len(wakes)-1].Message, len(wakes))
+	}
+
+	var powerCount int
+	if err := repository.db.QueryRowContext(ctx, `SELECT count(*) FROM power_attempts`).Scan(&powerCount); err != nil {
+		t.Fatal(err)
+	}
+	if powerCount != 500 {
+		t.Fatalf("power_attempts count = %d, want 500", powerCount)
+	}
+	powers, err := repository.ListPowerAttempts(ctx, 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(powers) != 500 || powers[0].Message != "power-524" || powers[len(powers)-1].Message != "power-025" {
+		t.Fatalf("unexpected power attempts bounds: first=%q last=%q len=%d", powers[0].Message, powers[len(powers)-1].Message, len(powers))
+	}
+}
+
+func TestListGroupsMultipleGroupsPreservesMemberOrderAndEmptySlice(t *testing.T) {
+	repository, err := Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	ctx := t.Context()
+
+	d1, err := repository.CreateDevice(ctx, Device{Name: "d1", MACAddress: "02:00:00:00:01:01", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d2, err := repository.CreateDevice(ctx, Device{Name: "d2", MACAddress: "02:00:00:00:01:02", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d3, err := repository.CreateDevice(ctx, Device{Name: "d3", MACAddress: "02:00:00:00:01:03", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repository.CreateGroup(ctx, Group{Name: "alpha", DeviceIDs: []string{d3.ID, d1.ID, d2.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.CreateGroup(ctx, Group{Name: "beta-empty"}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := repository.ListGroups(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 2 {
+		t.Fatalf("len(groups) = %d, want 2", len(groups))
+	}
+	if got := strings.Join(groups[0].DeviceIDs, ","); got != strings.Join([]string{d3.ID, d1.ID, d2.ID}, ",") {
+		t.Fatalf("alpha members = %v, want [%s %s %s]", groups[0].DeviceIDs, d3.ID, d1.ID, d2.ID)
+	}
+	if groups[1].DeviceIDs == nil || len(groups[1].DeviceIDs) != 0 {
+		t.Fatalf("beta-empty DeviceIDs = %#v, want non-nil empty slice", groups[1].DeviceIDs)
+	}
+}
+
+func BenchmarkListGroups(b *testing.B) {
+	repository, err := Open(filepath.Join(b.TempDir(), "bench.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer repository.Close()
+	ctx := context.Background()
+
+	const numDevices = 40
+	const numGroups = 50
+	deviceIDs := make([]string, 0, numDevices)
+	for i := 0; i < numDevices; i++ {
+		dev, err := repository.CreateDevice(ctx, Device{
+			Name:       fmt.Sprintf("bench-dev-%02d", i),
+			MACAddress: fmt.Sprintf("02:00:00:00:02:%02x", i),
+			Enabled:    true,
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		deviceIDs = append(deviceIDs, dev.ID)
+	}
+
+	for g := 0; g < numGroups; g++ {
+		members := []string{
+			deviceIDs[g%numDevices],
+			deviceIDs[(g+1)%numDevices],
+			deviceIDs[(g+2)%numDevices],
+			deviceIDs[(g+3)%numDevices],
+		}
+		if _, err := repository.CreateGroup(ctx, Group{
+			Name:        fmt.Sprintf("group-%03d", g),
+			Description: "benchmark group",
+			DeviceIDs:   members,
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		groups, err := repository.ListGroups(ctx)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(groups) != numGroups {
+			b.Fatalf("got %d groups, want %d", len(groups), numGroups)
+		}
 	}
 }

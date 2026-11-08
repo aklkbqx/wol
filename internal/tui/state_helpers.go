@@ -13,8 +13,11 @@ import (
 
 func (m *WakeModel) filteredDevices() []store.Device {
 	filter := strings.ToLower(strings.TrimSpace(m.filter))
+	if filter == "" && m.siteFilter == "" && m.stateFilter == "" {
+		return m.devices
+	}
 
-	items := make([]store.Device, 0)
+	items := make([]store.Device, 0, len(m.devices))
 	for _, item := range m.devices {
 		if m.siteFilter == "unassigned" && item.SiteID != "" {
 			continue
@@ -23,6 +26,10 @@ func (m *WakeModel) filteredDevices() []store.Device {
 			continue
 		}
 		if m.stateFilter != "" && !strings.EqualFold(m.deviceState(item), m.stateFilter) {
+			continue
+		}
+		if filter == "" {
+			items = append(items, item)
 			continue
 		}
 		text := strings.ToLower(strings.Join([]string{item.Name, item.MACAddress, item.IPAddress, item.WakeRelayID, m.siteName(item.SiteID)}, " "))
@@ -149,11 +156,52 @@ func powerWord(state string) string {
 	}
 }
 
+func (m *WakeModel) isWakeReady(device store.Device) bool {
+	if !device.Enabled {
+		return false
+	}
+	if _, err := wol.ParseMAC(device.MACAddress); err != nil {
+		return false
+	}
+	relayID := strings.TrimSpace(device.WakeRelayID)
+	if relayID == "" && device.SiteID != "" {
+		for _, s := range m.sites {
+			if s.ID == device.SiteID {
+				relayID = strings.TrimSpace(s.WakeRelayID)
+				break
+			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(device.WakeStrategy), "relay") || relayID != "" {
+		if relayID == "" {
+			return false
+		}
+		for _, relay := range m.relays {
+			if relay.ID != relayID {
+				continue
+			}
+			if !relay.Enabled || strings.TrimSpace(relay.Address) == "" || relay.Port < 0 || relay.Port > 65535 {
+				return false
+			}
+			if transport := strings.TrimSpace(relay.Transport); transport != "" && !strings.EqualFold(transport, "ssh_etherwake") {
+				return false
+			}
+			return true
+		}
+		return false
+	}
+	destination, port := m.routeTarget(device)
+	if ip := net.ParseIP(destination); ip == nil || ip.To4() == nil {
+		return false
+	}
+	return port >= 1 && port <= 65535
+}
+
 func (m *WakeModel) actionWord(device store.Device) string {
 	if m.streaming[device.ID] {
 		return "streaming"
 	}
-	if m.wakeCapability(device).state == "BLOCKED" {
+	if !m.isWakeReady(device) {
 		return "blocked"
 	}
 	if streamProfile(m.profiles[device.ID]) {
@@ -227,24 +275,16 @@ func (m *WakeModel) routeTarget(device store.Device) (destination string, port i
 	return destination, port
 }
 
-func (m *WakeModel) machineSummary(devices []store.Device) (online, offline, unknown, disabled, checking, ready, blocked int) {
+func (m *WakeModel) machineSummary(devices []store.Device) (online, offline, unknown int) {
 	for _, device := range devices {
 		switch m.deviceState(device) {
 		case "ONLINE":
 			online++
 		case "OFFLINE":
 			offline++
-		case "CHECKING":
-			checking++
-		case "DISABLED":
-			disabled++
+		case "CHECKING", "DISABLED":
 		default:
 			unknown++
-		}
-		if m.wakeCapability(device).state == "READY" {
-			ready++
-		} else {
-			blocked++
 		}
 	}
 	return

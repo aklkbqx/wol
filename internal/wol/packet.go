@@ -29,6 +29,10 @@ type SendResult struct {
 	Warning     string `json:"warning,omitempty"`
 }
 
+func isAllZeroMAC(mac net.HardwareAddr) bool {
+	return len(mac) == 6 && (mac[0]|mac[1]|mac[2]|mac[3]|mac[4]|mac[5]) == 0
+}
+
 func ParseMAC(value string) (net.HardwareAddr, error) {
 	clean := macDigits(value)
 	if len(clean) != 12 {
@@ -39,7 +43,7 @@ func ParseMAC(value string) (net.HardwareAddr, error) {
 		return nil, ErrInvalidMAC
 	}
 	mac := net.HardwareAddr(decoded)
-	if mac.String() == "00:00:00:00:00:00" || mac.String() == "ff:ff:ff:ff:ff:ff" || mac[0]&1 == 1 {
+	if isAllZeroMAC(mac) || mac[0]&1 == 1 {
 		return nil, ErrInvalidMAC
 	}
 	return mac, nil
@@ -47,17 +51,37 @@ func ParseMAC(value string) (net.HardwareAddr, error) {
 
 func macDigits(value string) string {
 	trimmed := strings.TrimSpace(value)
-	for _, sep := range []string{":", "-"} {
-		if !strings.Contains(trimmed, sep) {
-			continue
+	hasColon := strings.Contains(trimmed, ":")
+	hasHyphen := strings.Contains(trimmed, "-")
+	hasDot := strings.Contains(trimmed, ".")
+	sepCount := 0
+	if hasColon {
+		sepCount++
+	}
+	if hasHyphen {
+		sepCount++
+	}
+	if hasDot {
+		sepCount++
+	}
+	if sepCount > 1 {
+		return ""
+	}
+	if hasColon || hasHyphen {
+		sep := ":"
+		if hasHyphen {
+			sep = "-"
 		}
 		parts := strings.Split(trimmed, sep)
 		if len(parts) != 6 {
-			break
+			return ""
 		}
 		var b strings.Builder
+		b.Grow(12)
 		for _, part := range parts {
-			part = strings.TrimSpace(part)
+			if len(part) < 1 || len(part) > 2 {
+				return ""
+			}
 			if len(part) == 1 {
 				b.WriteByte('0')
 			}
@@ -65,11 +89,26 @@ func macDigits(value string) string {
 		}
 		return b.String()
 	}
-	return strings.NewReplacer(":", "", "-", "", ".", "", " ", "").Replace(trimmed)
+	if hasDot {
+		parts := strings.Split(trimmed, ".")
+		if len(parts) != 3 {
+			return ""
+		}
+		var b strings.Builder
+		b.Grow(12)
+		for _, part := range parts {
+			if len(part) != 4 {
+				return ""
+			}
+			b.WriteString(part)
+		}
+		return b.String()
+	}
+	return trimmed
 }
 
 func BuildMagicPacket(mac net.HardwareAddr) ([]byte, error) {
-	if len(mac) != 6 || mac[0]&1 == 1 {
+	if len(mac) != 6 || isAllZeroMAC(mac) || mac[0]&1 == 1 {
 		return nil, ErrInvalidMAC
 	}
 	packet := make([]byte, 6+16*6)

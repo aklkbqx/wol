@@ -223,6 +223,7 @@ type WakeModel struct {
 	pickerSelected int
 	actionCancel   context.CancelFunc
 	actionContext  context.Context
+	rootCtx        context.Context
 	actionID       uint64
 	actionTargetID string
 	actionTarget   string
@@ -285,12 +286,31 @@ func RunWakeDesk(dbPath string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	model.rootCtx = ctx
+	defer model.cancelAll()
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
 	_, err = program.Run()
 	if err != nil && !errors.Is(err, tea.ErrInterrupted) && !errors.Is(err, tea.ErrProgramKilled) {
 		return err
 	}
 	return nil
+}
+
+func (m *WakeModel) baseContext() context.Context {
+	if m != nil && m.rootCtx != nil {
+		return m.rootCtx
+	}
+	return context.Background()
+}
+
+func (m *WakeModel) cancelAll() {
+	if m.actionCancel != nil {
+		m.actionCancel()
+	}
+	if m.batchCancel != nil {
+		m.batchCancel()
+	}
+	m.finishLoadContext()
 }
 
 func (m *WakeModel) Init() tea.Cmd {
@@ -300,10 +320,7 @@ func (m *WakeModel) Init() tea.Cmd {
 func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch value := msg.(type) {
 	case tea.InterruptMsg:
-		if m.actionCancel != nil {
-			m.actionCancel()
-		}
-		m.finishLoadContext()
+		m.cancelAll()
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = value.Width, value.Height
@@ -476,7 +493,10 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		motionCmd := m.triggerMotion(StageSignal, 90*time.Second, 0, 0)
-		ctx, cancel := context.WithCancel(context.Background())
+		if m.actionCancel != nil {
+			m.actionCancel()
+		}
+		ctx, cancel := context.WithCancel(m.baseContext())
 		m.actionContext = ctx
 		m.actionCancel = cancel
 		return m, tea.Batch(m.verifyShutdown(operationID, device), motionCmd)
@@ -524,19 +544,13 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	keyName := msg.String()
 	if keyName == "ctrl+c" {
-		if m.actionCancel != nil {
-			m.actionCancel()
-		}
-		if m.batchCancel != nil {
-			m.batchCancel()
-		}
-		m.finishLoadContext()
+		m.cancelAll()
 		return tea.Quit
 	}
 	if m.phase != phaseReady {
 		switch keyName {
 		case "q", "ctrl+c":
-			m.finishLoadContext()
+			m.cancelAll()
 			return tea.Quit
 		case "r":
 			if m.phase == phaseLoadError {
@@ -595,13 +609,7 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleFormKey(msg)
 	}
 	if (m.waking || m.opening || m.shuttingDown) && (keyName == "q" || keyName == "ctrl+c") {
-		if m.actionCancel != nil {
-			m.actionCancel()
-		}
-		if m.batchCancel != nil {
-			m.batchCancel()
-		}
-		m.finishLoadContext()
+		m.cancelAll()
 		return tea.Quit
 	}
 	if m.actionPicker {
@@ -665,13 +673,7 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	switch keyName {
 	case "q", "ctrl+c":
-		if m.batchCancel != nil {
-			m.batchCancel()
-		}
-		if m.batchCancel != nil {
-			m.batchCancel()
-		}
-		m.finishLoadContext()
+		m.cancelAll()
 		return tea.Quit
 	case "tab":
 		m.tab = (m.tab + 1) % 4

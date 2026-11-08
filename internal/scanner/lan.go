@@ -59,6 +59,20 @@ func SyncDeviceIPs(ctx context.Context, repository *store.Store, devices []store
 	for _, n := range neighbors {
 		counts[n.MAC]++
 	}
+	var siteByID map[string]store.Site
+	for _, host := range moved {
+		if host.Device != nil && host.Device.SiteID != "" {
+			sites, err := repository.ListSites(ctx)
+			if err != nil {
+				return 0, err
+			}
+			siteByID = make(map[string]store.Site, len(sites))
+			for _, site := range sites {
+				siteByID[site.ID] = site
+			}
+			break
+		}
+	}
 	for _, host := range moved {
 		if host.Device == nil {
 			continue
@@ -68,9 +82,9 @@ func SyncDeviceIPs(ctx context.Context, repository *store.Store, devices []store
 			continue
 		}
 		if item.SiteID != "" {
-			site, err := repository.GetSite(ctx, item.SiteID)
-			if err != nil {
-				return updated, err
+			site, ok := siteByID[item.SiteID]
+			if !ok {
+				continue
 			}
 			if site.WakeRelayID != "" {
 				continue
@@ -99,7 +113,9 @@ func BroadcastOf(ip string) string {
 }
 
 func SuggestName(ip, mac string) string {
-	addrs, err := net.LookupAddr(ip)
+	lookupCtx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupAddr(lookupCtx, ip)
 	if err == nil {
 		for _, addr := range addrs {
 			name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(addr)), ".")
@@ -128,11 +144,14 @@ func GuessIdentity(ctx context.Context, ip string) (platform string, verifyPort 
 		platform string
 	}
 	probes := []hit{{3389, "windows"}, {22, "linux"}, {47989, "windows"}}
+	dialer := net.Dialer{Timeout: 250 * time.Millisecond}
 	for _, probe := range probes {
 		if ctx.Err() != nil {
 			return "unknown", 0
 		}
-		if CheckTCPPort(net.JoinHostPort(ip, strconv.Itoa(probe.port)), 250*time.Millisecond) {
+		conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ip, strconv.Itoa(probe.port)))
+		if err == nil {
+			_ = conn.Close()
 			return probe.platform, probe.port
 		}
 	}

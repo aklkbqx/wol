@@ -446,3 +446,64 @@ func TestStaleARPIgnoredOnTCPTimeout(t *testing.T) {
 		t.Fatalf("expected StatusOffline when TCP timed out, got %q via %s", res.Status, res.Method)
 	}
 }
+
+func TestSweepTCPBoundsConcurrentPortProbes(t *testing.T) {
+	ports := make([]int, 32)
+	for i := range ports {
+		ports[i] = 10000 + i
+	}
+
+	var active int32
+	var maxActive int32
+	d := NewDetector(
+		WithAllowLoopback(true),
+		WithTCPPorts(ports),
+		WithDialTCP(func(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error) {
+			cur := atomic.AddInt32(&active, 1)
+			for {
+				prev := atomic.LoadInt32(&maxActive)
+				if cur <= prev || atomic.CompareAndSwapInt32(&maxActive, prev, cur) {
+					break
+				}
+			}
+			time.Sleep(5 * time.Millisecond)
+			atomic.AddInt32(&active, -1)
+			return nil, errors.New("i/o timeout")
+		}),
+		WithPing(func(ctx context.Context, host string, timeout time.Duration) (time.Duration, error) {
+			return 0, errors.New("ping failed")
+		}),
+		WithNeighbor(func(ctx context.Context, host string) bool { return false }),
+	)
+
+	res := d.Probe(context.Background(), Target{
+		DeviceID:  "bounded",
+		IPAddress: "192.168.1.50",
+	}, 200*time.Millisecond)
+	if res.Status != StatusOffline {
+		t.Fatalf("expected StatusOffline, got %q", res.Status)
+	}
+	if got := atomic.LoadInt32(&maxActive); got > 8 {
+		t.Fatalf("max concurrent TCP port probes = %d, want <= 8", got)
+	}
+}
+
+func BenchmarkSweepTCP(b *testing.B) {
+	ports := []int{22, 80, 443, 445, 3389, 5900, 8080, 8443, 9090, 47984, 47989, 48010}
+	d := NewDetector(
+		WithAllowLoopback(true),
+		WithTCPPorts(ports),
+		WithDialTCP(func(ctx context.Context, network, address string, timeout time.Duration) (net.Conn, error) {
+			return nil, errors.New("i/o timeout")
+		}),
+	)
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		hit, unreachable, attempted := d.sweepTCP(ctx, "192.168.1.50", ports, 50*time.Millisecond)
+		if hit || unreachable || !attempted {
+			b.Fatalf("unexpected sweep result: hit=%v unreachable=%v attempted=%v", hit, unreachable, attempted)
+		}
+	}
+}

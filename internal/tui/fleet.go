@@ -135,7 +135,10 @@ func (m *WakeModel) startBatch() tea.Cmd {
 	m.lastBatchKind = m.batchKind
 	m.batchID++
 	m.batchResults = nil
-	ctx, cancel := context.WithCancel(context.Background())
+	if m.batchCancel != nil {
+		m.batchCancel()
+	}
+	ctx, cancel := context.WithCancel(m.baseContext())
 	m.batchCancel = cancel
 	profiles := make([]store.RemoteProfile, 0, len(m.profiles))
 	for _, p := range m.profiles {

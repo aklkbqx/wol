@@ -238,7 +238,9 @@ func (m *WakeModel) beginShutdownForm() {
 	useSudo := "no"
 
 	if m.repository != nil {
-		if profile, err := m.repository.GetPowerProfile(context.Background(), device.ID); err == nil {
+		ctx, cancel := context.WithTimeout(m.baseContext(), 2*time.Second)
+		defer cancel()
+		if profile, err := m.repository.GetPowerProfile(ctx, device.ID); err == nil {
 			if profile.SSHUser != "" {
 				sshUser = profile.SSHUser
 			}
@@ -251,7 +253,7 @@ func (m *WakeModel) beginShutdownForm() {
 			if profile.UseSudo {
 				useSudo = "yes"
 			}
-		} else if rProfile, err := m.repository.GetRemoteProfile(context.Background(), device.ID); err == nil {
+		} else if rProfile, err := m.repository.GetRemoteProfile(ctx, device.ID); err == nil {
 			if rProfile.UsernameHint != "" {
 				sshUser = rProfile.UsernameHint
 			}
@@ -291,8 +293,9 @@ func (m *WakeModel) beginDelete() {
 func (m *WakeModel) deleteConfirmed() tea.Cmd {
 	confirm := m.confirm
 	m.confirm = ""
+	baseCtx := m.baseContext()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(baseCtx, 3*time.Second)
 		defer cancel()
 		parts := strings.SplitN(confirm, ":", 2)
 		if len(parts) != 2 {
@@ -406,8 +409,9 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			values[i] = form.inputs[i].Value()
 		}
 	}
+	baseCtx := m.baseContext()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(baseCtx, 3*time.Second)
 		defer cancel()
 		if form.kind == relayForm {
 			port, err := parseFormInt(values[2], 22)
@@ -517,7 +521,7 @@ func (m *WakeModel) saveForm() tea.Cmd {
 			}
 
 			svc := power.NewService(nil)
-			callCtx, cancelFn := context.WithTimeout(context.Background(), 15*time.Second)
+			callCtx, cancelFn := context.WithTimeout(baseCtx, 15*time.Second)
 			defer cancelFn()
 
 			res, execErr := svc.Execute(callCtx, power.Request{
@@ -532,7 +536,7 @@ func (m *WakeModel) saveForm() tea.Cmd {
 				statusStr = "failed"
 				msg = execErr.Error()
 			}
-			recordCtx, recordCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			recordCtx, recordCancel := context.WithTimeout(baseCtx, 5*time.Second)
 			defer recordCancel()
 			_, _ = m.repository.RecordPowerAttempt(recordCtx, store.PowerAttempt{
 				DeviceID:     device.ID,

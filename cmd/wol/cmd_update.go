@@ -12,6 +12,8 @@ import (
 	"github.com/aklkbqx/wol/internal/updater"
 )
 
+var newUpdateClient = updater.NewClient
+
 func runUpdate(arguments []string) int {
 	flags := flag.NewFlagSet("update", flag.ContinueOnError)
 	checkOnly := flags.Bool("check", false, "check for available updates without installing")
@@ -35,7 +37,7 @@ func runUpdate(arguments []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	client := updater.NewClient(buildinfo.Version, updater.WithRepo(*repo))
+	client := newUpdateClient(buildinfo.Version, updater.WithRepo(*repo))
 
 	currentTag := buildinfo.Version
 	if !strings.HasPrefix(currentTag, "v") && !strings.HasPrefix(currentTag, "V") {

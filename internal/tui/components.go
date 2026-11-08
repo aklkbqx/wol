@@ -1,10 +1,6 @@
 package tui
 
-import (
-	"strings"
-
-	"github.com/charmbracelet/lipgloss"
-)
+import "strings"
 
 func renderPanel(theme Theme, title, subtitle, body string, width int) string {
 	inner := clampWidth(width, 8, 0)
@@ -63,7 +59,7 @@ func renderCardBox(theme Theme, title string, body string, width, minHeight int)
 			titleRendered = title
 		}
 	}
-	rawTitleWidth := lipgloss.Width(stripANSI(titleRendered))
+	rawTitleWidth := visibleWidth(stripANSI(titleRendered))
 	topFillWidth := max(0, width-6-rawTitleWidth)
 	topLine := theme.cardLine().Render(tl) + titleRendered + theme.cardLine().Render(" "+strings.Repeat(hz, topFillWidth)+tr)
 	topLine = fitText(topLine, width)
@@ -73,6 +69,8 @@ func renderCardBox(theme Theme, title string, body string, width, minHeight int)
 	if minHeight > 0 && contentCount < minHeight {
 		contentCount = minHeight
 	}
+	leftBorder := theme.cardLine().Render(vt)
+	rightBorder := theme.cardLine().Render(vtR)
 	lines := make([]string, 0, contentCount+2)
 	lines = append(lines, topLine)
 	for i := 0; i < contentCount; i++ {
@@ -80,9 +78,9 @@ func renderCardBox(theme Theme, title string, body string, width, minHeight int)
 		if i < len(bodyLines) {
 			line = bodyLines[i]
 		}
-		rawLineWidth := lipgloss.Width(stripANSI(line))
+		rawLineWidth := visibleWidth(stripANSI(line))
 		fill := max(0, innerWidth-rawLineWidth)
-		midLine := theme.cardLine().Render(vt) + line + strings.Repeat(" ", fill) + theme.cardLine().Render(vtR)
+		midLine := leftBorder + line + strings.Repeat(" ", fill) + rightBorder
 		lines = append(lines, fitText(midLine, width))
 	}
 	bottomLine := theme.cardLine().Render(bl + strings.Repeat(hz, max(0, width-4)) + br)

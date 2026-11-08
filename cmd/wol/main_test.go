@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aklkbqx/wol/internal/store"
 )
 
 func TestUsage(t *testing.T) {
@@ -98,5 +102,71 @@ func TestTUIFlagParsing(t *testing.T) {
 	code := runWakeDesk([]string{"--unknown-flag=value"})
 	if code != 2 {
 		t.Errorf("expected exit code 2 for unknown flag, got %d", code)
+	}
+}
+
+func TestWakeStoredDeviceAndDoctorAndScanFlags(t *testing.T) {
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.LocalAddr().(*net.UDPAddr).Port
+
+	dbPath := filepath.Join(t.TempDir(), "wol.db")
+	repo, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev, err := repo.CreateDevice(context.Background(), store.Device{
+		Name:             "stored-rig",
+		MACAddress:       "02:00:00:00:00:99",
+		BroadcastAddress: "127.0.0.1",
+		Port:             port,
+		Enabled:          false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = repo.Close()
+
+	// Waking disabled stored device without --force returns exit code 3
+	if code := runWake([]string{"--db", dbPath, "--device", dev.Name, "--repeat", "1"}); code != 3 {
+		t.Fatalf("runWake disabled device code = %d, want 3", code)
+	}
+
+	// Waking disabled stored device with --force returns exit code 0
+	if code := runWake([]string{"--db", dbPath, "--device", dev.Name, "--repeat", "1", "--force"}); code != 0 {
+		t.Fatalf("runWake --force stored device code = %d, want 0", code)
+	}
+
+	t.Setenv("TEST_WOL_ENV_HELPER", "  custom-val  ")
+	if got := envString("TEST_WOL_ENV_HELPER", "fallback"); got != "custom-val" {
+		t.Fatalf("envString = %q, want custom-val", got)
+	}
+
+	if code := runDoctor([]string{"--unknown-flag"}); code != 2 {
+		t.Fatalf("runDoctor invalid flag code = %d, want 2", code)
+	}
+	if code := runScan([]string{"--unknown-flag"}); code != 2 {
+		t.Fatalf("runScan invalid flag code = %d, want 2", code)
+	}
+	row := lanRow("192.168.1.10", "02:00:00:00:00:01", "box", "known")
+	if len(row) != 2 || !strings.Contains(row[0], "box") {
+		t.Fatalf("unexpected lanRow: %#v", row)
+	}
+
+	envPath := filepath.Join(t.TempDir(), ".wol.env")
+	if err := os.WriteFile(envPath, []byte("WOL_DEFAULT_PORT=9\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WOL_DB", dbPath)
+	_ = runDoctor([]string{"--env-file", envPath})
+
+	if code := runStatus([]string{"--db", dbPath}); code != 2 {
+		t.Fatalf("runStatus missing arg code = %d, want 2", code)
+	}
+	if code := runStatus([]string{"--db", dbPath, "--json", dev.Name}); code != 1 {
+		t.Fatalf("runStatus --json no-ip code = %d, want 1", code)
 	}
 }

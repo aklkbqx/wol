@@ -40,7 +40,7 @@ func (m *WakeModel) startPresenceScan(devices []store.Device, requestID uint64, 
 		return nil
 	}
 	if parent == nil {
-		parent = context.Background()
+		parent = m.baseContext()
 	}
 	m.loadContext, m.loadCancel = context.WithCancel(parent)
 	profiles := make([]store.RemoteProfile, 0, len(m.profiles))
@@ -97,7 +97,7 @@ func (m *WakeModel) probeSelected() tea.Cmd {
 	detector := m.presenceDetector()
 	m.checking = true
 	motionCmd := m.triggerMotion(StageSignal, 15*time.Second, 0, 0)
-	m.loadContext, m.loadCancel = context.WithCancel(context.Background())
+	m.loadContext, m.loadCancel = context.WithCancel(m.baseContext())
 	requestID := m.requestID
 	parent := m.loadContext
 	checkCmd := func() tea.Msg {

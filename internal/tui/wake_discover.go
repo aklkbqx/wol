@@ -23,8 +23,9 @@ func (m *WakeModel) beginLANDiscover() tea.Cmd {
 	m.status = "Scanning LAN neighbors..."
 	repo := m.repository
 	devices := append([]store.Device(nil), m.devices...)
+	baseCtx := m.baseContext()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(baseCtx, 3*time.Second)
 		defer cancel()
 		neighbors, err := scanner.ScanLAN(ctx)
 		if err != nil {
@@ -168,8 +169,9 @@ func (m *WakeModel) beginAddFromLAN(neighbor presence.Neighbor) tea.Cmd {
 	id := m.lanPrepareID
 	m.lanPreparing = true
 	m.status = "Checking discovered services. Esc cancels."
+	baseCtx := m.baseContext()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(baseCtx, 2*time.Second)
 		defer cancel()
 		platform, port := scanner.GuessIdentity(ctx, neighbor.IP)
 		return lanPrepareMsg{id: id, neighbor: neighbor, platform: platform, port: port}

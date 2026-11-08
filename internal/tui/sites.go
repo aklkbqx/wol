@@ -142,12 +142,13 @@ func (m *WakeModel) checkSelectedSite() tea.Cmd {
 	site := m.sites[min(m.selected, len(m.sites)-1)]
 	service := m.service
 	m.status = "Checking site " + site.Name + "..."
+	baseCtx := m.baseContext()
 	return func() tea.Msg {
 		timeout := time.Duration(site.TimeoutMS) * time.Millisecond
 		if timeout <= 0 {
 			timeout = 2500 * time.Millisecond
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctx, cancel := context.WithTimeout(baseCtx, timeout)
 		defer cancel()
 		route, err := service.ResolveRoute(ctx, store.Device{SiteID: site.ID})
 		if err != nil {
@@ -162,7 +163,10 @@ func (m *WakeModel) checkSelectedSite() tea.Cmd {
 			return siteCheckMsg{message: site.Name + ": relay port reachable; SSH credentials and etherwake still require verification."}
 		}
 		if site.Subnet != "" {
-			ip, _, _ := net.ParseCIDR(site.Subnet)
+			ip, _, err := net.ParseCIDR(site.Subnet)
+			if err != nil || ip == nil {
+				return siteCheckMsg{message: site.Name + ": invalid site subnet."}
+			}
 			if netutil.LocalBroadcast(ip.String(), site.DefaultInterface) == "" {
 				return siteCheckMsg{message: site.Name + ": no matching local interface; connect to this LAN or configure a relay."}
 			}

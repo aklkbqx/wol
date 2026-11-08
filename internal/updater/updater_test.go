@@ -467,3 +467,13 @@ func TestExecuteUpdateWithAsset(t *testing.T) {
 		t.Errorf("target file content mismatch: got %q, want %q", string(newBinary), string(content))
 	}
 }
+
+func TestNewClientSetsDefaultHTTPTimeout(t *testing.T) {
+	client := NewClient("0.4.19-dev")
+	if client.HTTPClient == nil {
+		t.Fatal("expected non-nil HTTPClient")
+	}
+	if client.HTTPClient.Timeout != DefaultTimeout {
+		t.Fatalf("HTTPClient.Timeout = %v, want %v", client.HTTPClient.Timeout, DefaultTimeout)
+	}
+}

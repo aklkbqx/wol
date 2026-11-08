@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aklkbqx/wol/internal/store"
 )
@@ -70,31 +71,40 @@ func OpenDesktop(ctx context.Context, profile store.RemoteProfile) error {
 		return err
 	}
 	if runtime.GOOS == "windows" && strings.EqualFold(profile.Protocol, "rdp") {
-		host := profile.Host
+		host := strings.TrimSpace(profile.Host)
 		if profile.Port > 0 && profile.Port != 3389 {
-			host = net.JoinHostPort(profile.Host, strconv.Itoa(profile.Port))
+			host = net.JoinHostPort(host, strconv.Itoa(profile.Port))
 		}
-		// The desktop session outlives the CLI's launch context.
+		// The desktop session outlives the CLI's launch context. Release the
+		// OS process handle directly instead of parking an unowned goroutine.
 		cmd := exec.Command("mstsc", "/v:"+host)
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("open Remote Desktop: %w", err)
 		}
-		go func() { _ = cmd.Wait() }()
+		if cmd.Process != nil {
+			_ = cmd.Process.Release()
+		}
 		return nil
 	}
+	launchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		cmd = exec.CommandContext(ctx, "open", target)
+		cmd = exec.CommandContext(launchCtx, "open", target)
 	case "windows":
-		cmd = exec.CommandContext(ctx, "rundll32.exe", "url.dll,FileProtocolHandler", target)
+		cmd = exec.CommandContext(launchCtx, "rundll32.exe", "url.dll,FileProtocolHandler", target)
 	default:
-		cmd = exec.CommandContext(ctx, "xdg-open", target)
+		cmd = exec.CommandContext(launchCtx, "xdg-open", target)
 	}
 	// Wait for the URL handler to accept the request before the caller cancels
 	// its context, and surface failures such as a missing registered client.
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("open %s session: %w: %s", profile.Protocol, err, strings.TrimSpace(string(output)))
+		detail := strings.TrimSpace(string(output))
+		if len(detail) > 256 {
+			detail = detail[:256]
+		}
+		return fmt.Errorf("open %s session: %w: %s", profile.Protocol, err, detail)
 	}
 	return nil
 }

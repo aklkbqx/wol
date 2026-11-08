@@ -2,14 +2,19 @@ package remoteflow
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aklkbqx/wol/internal/localremote"
 	"github.com/aklkbqx/wol/internal/moonlight"
 	"github.com/aklkbqx/wol/internal/store"
+	wakeservice "github.com/aklkbqx/wol/internal/wake"
+	"github.com/aklkbqx/wol/internal/wol"
 )
 
 func TestOpenUsesOnlyGeneratedLocalSession(t *testing.T) {
@@ -197,5 +202,101 @@ func TestOpenLaunchesMoonlightForSunshineProfile(t *testing.T) {
 	}
 	if msg == "" {
 		t.Fatal("expected non-empty success message")
+	}
+}
+
+func TestAutoWakeAndWaitUntilReachableAndStopStreaming(t *testing.T) {
+	repository, err := store.Open(filepath.Join(t.TempDir(), "wol.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repository.Close()
+	ctx := t.Context()
+
+	device, err := repository.CreateDevice(ctx, store.Device{
+		Name:             "wake-rig",
+		MACAddress:       "02:00:00:00:00:88",
+		IPAddress:        "192.168.1.88",
+		BroadcastAddress: "192.168.1.255",
+		Port:             9,
+		Enabled:          true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := store.RemoteProfile{
+		DeviceID:   device.ID,
+		Protocol:   "rdp",
+		Host:       device.IPAddress,
+		Port:       3389,
+		VerifyPort: 3389,
+		Mode:       "native",
+		Enabled:    true,
+	}
+
+	manager := New(repository, func(context.Context, string) error { return nil })
+	defer manager.Close()
+
+	woke := false
+	manager.service = wakeservice.NewService(repository, wakeservice.Hooks{
+		Direct: func(_ context.Context, req wol.SendRequest) (wol.SendResult, error) {
+			woke = true
+			return wol.SendResult{Destination: req.Destination.String(), Port: req.Port, Packets: 1}, nil
+		},
+	})
+	probeCount := 0
+	manager.probe = func(context.Context, string, int) bool {
+		probeCount++
+		return probeCount >= 2
+	}
+	manager.startDesktop = func(context.Context, store.RemoteProfile) error {
+		return nil
+	}
+
+	msg, err := manager.Open(ctx, device, profile, true)
+	if err != nil {
+		t.Fatalf("Open with autoWake failed: %v", err)
+	}
+	if !woke || !strings.Contains(msg, "Opened RDP") {
+		t.Fatalf("unexpected autoWake result: woke=%v msg=%q", woke, msg)
+	}
+
+	// Test context cancellation in waitUntilReachable
+	manager.probe = func(context.Context, string, int) bool { return false }
+	cancelCtx, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if err := manager.waitUntilReachable(cancelCtx, "192.168.1.88", 3389, 5*time.Second); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waitUntilReachable err = %v, want DeadlineExceeded", err)
+	}
+
+	// Test validation and error branches
+	var nilManager *Manager
+	if _, err := nilManager.Open(ctx, device, profile, false); err == nil {
+		t.Fatal("nilManager.Open should fail")
+	}
+	if nilManager.Streaming(device.ID) {
+		t.Fatal("nilManager.Streaming should be false")
+	}
+	if err := nilManager.Stop(device.ID); err != nil {
+		t.Fatalf("nilManager.Stop = %v", err)
+	}
+	if err := nilManager.Close(); err != nil {
+		t.Fatalf("nilManager.Close = %v", err)
+	}
+
+	if _, err := manager.Open(ctx, device, store.RemoteProfile{DeviceID: "other", Enabled: true}, false); err == nil {
+		t.Fatal("mismatched profile should fail")
+	}
+
+	manager.probe = func(context.Context, string, int) bool { return true }
+	if _, err := manager.Open(ctx, device, store.RemoteProfile{DeviceID: device.ID, Protocol: "rdp", Host: device.IPAddress, Mode: "unsupported-mode", Enabled: true}, false); err == nil {
+		t.Fatal("unsupported mode should fail")
+	}
+
+	if manager.Streaming(device.ID) {
+		t.Fatal("expected Streaming to be false")
+	}
+	if err := manager.Stop(device.ID); err != nil {
+		t.Fatalf("Stop() = %v", err)
 	}
 }
