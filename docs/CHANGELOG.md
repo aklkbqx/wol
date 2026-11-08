@@ -1,3 +1,15 @@
+# 0.4.19 — 2026-11-08
+
+- Bound `wake_attempts` and `power_attempts` history to 500 rows with
+  deterministic ordering, and replace N+1 group member queries in `ListGroups`
+  with a single ordered query (#8).
+- Enforce `0600` permissions on SQLite database and journal files in
+  `store.Open`, set a 30s default HTTP client timeout in `updater.NewClient`,
+  and bound `remoteopen.OpenDesktop` subprocesses (#8).
+- Cap `Detector.sweepTCP` concurrency to 8 workers, propagate the root signal
+  context in `WakeModel`, guard invalid site CIDRs in TUI/scanner, and expand
+  critical package and fuzz test coverage (#8).
+
 # 0.4.18 — 2026-10-15
 
 - Improve normal-text contrast on dark TUI panels and add `WOL_TUI_REDACT=1`

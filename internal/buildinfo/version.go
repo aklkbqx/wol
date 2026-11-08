@@ -6,7 +6,7 @@ import "strings"
 var (
 	// Version is the application release version embedded in the binary.
 	// Keep this as the single source of truth for user-visible version reporting.
-	Version = "0.4.19-dev"
+	Version = "0.4.19"
 
 	// Credit identifies the project maintainer shown by the CLI metadata command.
 	Credit = "aklkbqx"
