@@ -41,9 +41,12 @@ clean:
 	$(GO) clean
 	rm -rf dist
 
-.PHONY: verify package
+.PHONY: verify package publish-homebrew-tap
 verify:
 	sh scripts/verify.sh
 
 package:
 	sh scripts/package.sh
+
+publish-homebrew-tap:
+	./scripts/update-homebrew-tap.sh $(VERSION) dist/packages/$(VERSION) --publish

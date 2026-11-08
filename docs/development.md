@@ -50,8 +50,9 @@ macOS builds are ad-hoc signed, not notarized.
    notes, including tests that could not be performed.
 4. Build and install the production binary locally with make build and
    install -m 755 dist/wol ~/.local/bin/wol.
-5. Create the matching git tag and publish the GitHub release with every
-   supported platform archive, SHA256SUMS and SHA256SUMS.sig.
+5. Create the matching git tag, publish the GitHub release with every
+   supported platform archive, SHA256SUMS and SHA256SUMS.sig, and update the
+   Homebrew tap with `make publish-homebrew-tap VERSION=X.Y.Z`.
 6. Subsequent edits bump to the next -dev version and reinstall for testing.
 
 Release scripts run locally and do not publish or push automatically.

@@ -12,6 +12,7 @@ fi
 sh scripts/verify.sh
 sh scripts/package.sh
 out="dist/packages/$version"
+sh scripts/update-homebrew-tap.sh "$version" "$out"
 if [ "${WOL_RELEASE_UNSIGNED:-}" = 1 ]; then
  echo 'WOL_RELEASE_UNSIGNED=1: SHA256SUMS is not signed; do not publish these archives.' >&2
 else

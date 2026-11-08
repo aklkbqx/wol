@@ -55,7 +55,13 @@ not an error: WOL reports power state and wake readiness separately.
 
 ## Install
 
-Download the archive for your system from
+On macOS and Linux with [Homebrew](https://brew.sh):
+
+```sh
+brew install aklkbqx/wol/wol
+```
+
+Or download the archive for your system from
 [Releases](https://github.com/aklkbqx/wol/releases/latest), verify it against
 `SHA256SUMS`, extract it and put `wol` on your `PATH`. Each release lists the
 platforms that were actually tested.
