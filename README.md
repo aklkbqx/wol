@@ -14,7 +14,7 @@ list is a local SQLite file. There is no account, server or background service.
 with a real Wake Desk recording, in English and Thai.
 
 ```text
-⚡ wol command center  v0.4.18  checked 21:51:54
+⚡ wol command center  v0.4.19  checked 21:51:54
 ◆ machines   │     routes   │     activity   │     sites
 
 ╭─ ◆ FLEET ────────────────────────────────────────────────────╮ ╭─ ◆ INSPECTOR ─────────────────────────────────────╮
@@ -34,7 +34,7 @@ Checked 1/1 machines. Unreachable does not prove power is off.
 enter choose   space select   / search   ? help   q quit
 ```
 
-<sub>Wake Desk v0.4.18 with a sample machine and documentation addresses.</sub>
+<sub>Wake Desk v0.4.19 with a sample machine and documentation addresses.</sub>
 
 ## What it does
 

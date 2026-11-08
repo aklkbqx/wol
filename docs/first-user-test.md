@@ -20,7 +20,8 @@ ask the maintainer for help until you have finished or are stuck.
 
 Record the time each step takes and anything that surprised you.
 
-1. **Install.** Download the release archive for your system from the
+1. **Install.** Install with `brew install aklkbqx/wol/wol` on macOS/Linux, or
+   download the release archive for your system from the
    [latest release](https://github.com/aklkbqx/wol/releases/latest), check it
    against `SHA256SUMS`, extract it and put `wol` on your PATH, following the
    README. Run `wol version` and `wol doctor`.
@@ -55,7 +56,7 @@ that identifies your network.
 WOL version:
 OS and version / architecture:
 Terminal and version:
-Install method (release archive / make install / other):
+Install method (Homebrew / release archive / make install / other):
 Wake target: OS, sleep or shutdown, wired or Wi-Fi
 
 Step results (pass / fail / skipped, minutes, notes):

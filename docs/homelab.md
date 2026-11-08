@@ -7,8 +7,9 @@ separate properties.
 
 ## First machine
 
-1. Install the binary for your OS and architecture from a release, verify its
-   SHA256SUMS, then put it on PATH. Development builds can use `make install`.
+1. Install with `brew install aklkbqx/wol/wol` on macOS/Linux, or download the
+   binary for your OS and architecture from a release, verify its SHA256SUMS,
+   then put it on PATH. Development builds can use `make install`.
 2. Run `wol`. Press `n` to discover neighbors, `a` to add manually, or `i`
    to import an inventory file.
 3. In discovery, `f` cycles interfaces. Space selects new hosts; Enter reviews
