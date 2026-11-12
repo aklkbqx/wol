@@ -1,13 +1,13 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"context"
 	"fmt"
 	"github.com/aklkbqx/wol/internal/fleet"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,19 +87,19 @@ func TestHundredMachineInteractionAndBatchCancellation(t *testing.T) {
 	}
 	m.sites = []store.Site{{ID: "0", Name: "Home", Concurrency: 2}, {ID: "1", Name: "Lab", Concurrency: 2}, {ID: "2", Name: "Office", Concurrency: 2}}
 	cmd := m.startPresenceScan(m.devices, m.requestID, loadingRefresh, nil)
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m.handleKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	if m.selected != 1 {
 		t.Fatal("navigation blocked by scan")
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{' '}})
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
 	if !m.marked["1"] {
 		t.Fatal("selection failed")
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'S'}})
+	m.handleKey(tea.KeyPressMsg{Code: 'S', Text: "S"})
 	if m.batchKind != "check" || len(m.batchTargets) != 1 {
 		t.Fatal("batch was not previewed")
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if m.batchKind != "" || m.batchRunning {
 		t.Fatal("preview sent work")
 	}
@@ -113,7 +113,7 @@ func TestHundredMachineInteractionAndBatchCancellation(t *testing.T) {
 		m.width = w
 		for tab := 0; tab < 4; tab++ {
 			m.tab = tab
-			for _, line := range strings.Split(m.View(), "\n") {
+			for _, line := range strings.Split(m.render(), "\n") {
 				if lipgloss.Width(stripANSI(line)) > w {
 					t.Fatalf("width %d tab %d: %q", w, tab, line)
 				}
@@ -126,7 +126,7 @@ func TestHundredMachineInteractionAndBatchCancellation(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("missing batch")
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	for cmd != nil {
 		_, cmd = m.Update(cmd())
 	}

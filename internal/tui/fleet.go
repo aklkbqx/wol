@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/fleet"
 	"github.com/aklkbqx/wol/internal/store"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type fleetMsg struct {
@@ -171,7 +171,16 @@ func (m *WakeModel) retryBatch() {
 	m.prepareBatch(kind)
 }
 func (m *WakeModel) renderBatchPreview(width int) string {
-	lines := []string{fmt.Sprintf("%s: %d selected machines", strings.ToUpper(m.batchKind), len(m.batchTargets))}
+	budget := m.bodyLineBudget()
+	framed := width >= 44 && budget >= 8
+	innerW := width
+	maxRows := max(4, budget)
+	if framed {
+		innerW = width - 4
+		maxRows = max(4, budget-2)
+	}
+
+	lines := []string{m.theme.accent().Render(fitText(fmt.Sprintf("%s: %d selected machines", strings.ToUpper(m.batchKind), len(m.batchTargets)), innerW))}
 	sites := make(map[string]int)
 	for _, d := range m.batchTargets {
 		sites[m.siteName(d.SiteID)]++
@@ -180,26 +189,33 @@ func (m *WakeModel) renderBatchPreview(width int) string {
 	seen := make(map[string]bool)
 	for _, d := range m.batchTargets {
 		name := m.siteName(d.SiteID)
-		if !seen[name] {
-			lines = append(lines, fmt.Sprintf("%s: %d", m.privateField(name), sites[name]))
+		if !seen[name] && len(lines) < maxRows-2 {
+			lines = append(lines, m.theme.muted().Render(fitText(fmt.Sprintf("%s: %d", m.privateField(name), sites[name]), innerW)))
 			seen[name] = true
 		}
 	}
+	targetSlots := max(1, maxRows-len(lines)-1)
 	for i, d := range m.batchTargets {
 		if i < m.batchPreviewIndex {
 			continue
 		}
-		if i-m.batchPreviewIndex >= max(1, m.height-14) {
-			lines = append(lines, "… remaining targets included in count")
+		if i-m.batchPreviewIndex >= targetSlots {
+			if len(lines) < maxRows-1 {
+				lines = append(lines, m.theme.muted().Render(fitText("… remaining targets included in count", innerW)))
+			}
 			break
 		}
-		lines = append(lines, m.privateField(d.Name)+" · "+m.privateField(m.siteName(d.SiteID)))
+		lines = append(lines, fitText("  "+m.privateField(d.Name)+" · "+m.privateField(m.siteName(d.SiteID)), innerW))
 	}
-	lines = append(lines, "j/k scroll · Enter confirm · Esc cancel")
-	for i := range lines {
-		lines[i] = fitText(lines[i], width)
+	lines = append(lines, m.theme.muted().Render(fitText("j/k scroll · Enter confirm · Esc cancel", innerW)))
+	if len(lines) > maxRows {
+		lines = lines[:maxRows]
 	}
-	return strings.Join(lines, "\n")
+	body := strings.Join(lines, "\n")
+	if framed {
+		return renderShearedBox(m.theme, m.theme.Glyph("diamond")+" BATCH PREVIEW", fmt.Sprintf("%d selected", len(m.batchTargets)), body, width, 0, true)
+	}
+	return body
 }
 func (m *WakeModel) siteName(id string) string {
 	for _, s := range m.sites {
@@ -248,20 +264,31 @@ func (m *WakeModel) cycleState() {
 }
 
 func (m *WakeModel) renderBatchResults(width int) string {
-	rows := []string{fmt.Sprintf("Batch results %d/%d · j/k scroll · b back", len(m.batchResults), len(m.batchTargets))}
+	budget := m.bodyLineBudget()
+	framed := width >= 44 && budget >= 8
+	innerW := width
+	maxRows := max(3, budget)
+	if framed {
+		innerW = width - 4
+		maxRows = max(3, budget-2)
+	}
+
+	rows := []string{m.theme.muted().Render(fitText(fmt.Sprintf("Batch results %d/%d · j/k scroll · b back", len(m.batchResults), len(m.batchTargets)), innerW))}
 	start := max(0, m.batchPreviewIndex)
-	end := min(len(m.batchResults), start+max(1, m.height-12))
+	end := min(len(m.batchResults), start+max(1, maxRows-1))
 	for _, r := range m.batchResults[start:end] {
-		rows = append(rows, m.privateField(r.Name)+" · "+r.Status+" · "+m.privateField(r.Method))
-		if r.Message != "" {
-			rows = append(rows, m.privateMessage(r.Message))
+		if len(rows) >= maxRows {
+			break
+		}
+		statusStyled := stateStyle(m.theme, r.Status).Render(r.Status)
+		rows = append(rows, fitText(m.privateField(r.Name)+" · "+statusStyled+" · "+m.privateField(r.Method), innerW))
+		if r.Message != "" && len(rows) < maxRows {
+			rows = append(rows, m.theme.muted().Render(fitText("  "+m.privateMessage(r.Message), innerW)))
 		}
 	}
-	if len(rows) > max(1, m.height-9) {
-		rows = rows[:max(1, m.height-9)]
+	body := strings.Join(rows, "\n")
+	if framed {
+		return renderShearedBox(m.theme, m.theme.Glyph("diamond")+" BATCH RESULTS", fmt.Sprintf("%d/%d", len(m.batchResults), len(m.batchTargets)), body, width, 0, true)
 	}
-	for i := range rows {
-		rows[i] = fitText(rows[i], width)
-	}
-	return strings.Join(rows, "\n")
+	return body
 }

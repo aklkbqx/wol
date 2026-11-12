@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/buildinfo"
 	"github.com/aklkbqx/wol/internal/fleet"
 	"github.com/aklkbqx/wol/internal/presence"
@@ -19,8 +20,8 @@ import (
 	"github.com/aklkbqx/wol/internal/remoteopen"
 	"github.com/aklkbqx/wol/internal/scanner"
 	"github.com/aklkbqx/wol/internal/store"
+	"github.com/aklkbqx/wol/internal/termimg"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type wakeDataMsg struct {
@@ -90,6 +91,9 @@ type lanDiscoverMsg struct {
 	updated  int
 	err      error
 }
+
+// clockTickMsg redraws the wake countdown once a second when motion is off.
+type clockTickMsg struct{ id uint64 }
 
 type wakeTickMsg struct {
 	id uint64
@@ -167,6 +171,7 @@ type WakeModel struct {
 	theme             Theme
 	redactIdentifiers bool
 	motion            Motion
+	art               *artCache // pictures; nil or mode None draws none
 
 	width          int
 	height         int
@@ -229,6 +234,7 @@ type WakeModel struct {
 	actionTarget   string
 	motionID       uint64
 	frame          uint64
+	wakeSentAt     time.Time
 }
 
 // NewWakeModel creates the standalone TUI model around an already-open SQLite
@@ -288,8 +294,12 @@ func RunWakeDesk(dbPath string) error {
 	defer stop()
 	model.rootCtx = ctx
 	defer model.cancelAll()
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
+	model.art = newArtCache(termimg.Detect(os.Getenv))
+	program := tea.NewProgram(model, tea.WithContext(ctx))
 	_, err = program.Run()
+	if release := model.art.release(); release != "" {
+		_, _ = os.Stdout.WriteString(release)
+	}
 	if err != nil && !errors.Is(err, tea.ErrInterrupted) && !errors.Is(err, tea.ErrProgramKilled) {
 		return err
 	}
@@ -317,15 +327,26 @@ func (m *WakeModel) Init() tea.Cmd {
 	return m.beginRefresh(loadingBoot)
 }
 
+// Update handles one message, then sends any pictures the next frame needs.
 func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	return model, m.withArt(cmd)
+}
+
+func (m *WakeModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch value := msg.(type) {
+	case photoLoadedMsg:
+		if m.art != nil {
+			m.art.photoLoaded(value)
+		}
+		return m, nil
 	case tea.InterruptMsg:
 		m.cancelAll()
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = value.Width, value.Height
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m, m.handleKey(value)
 	case wakeDataMsg:
 		if value.requestID != m.requestID {
@@ -350,8 +371,9 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prependWakeAttempt(value.result.Attempt)
 			m.status = fmt.Sprintf("%s · packet sent via %s (%d). Waiting for power...", value.targetName, routeLabel(value.result.Route), value.result.Attempt.Packets)
 			m.action = "wake-wait"
-			motionCmd := m.triggerMotion(StageSignal, 95*time.Second, 0, 0)
-			return m, tea.Batch(m.verifyWake(value.operationID, value.result.Device), motionCmd)
+			m.wakeSentAt = time.Now()
+			motionCmd := m.triggerMotion(StageSignal, wakeAnswerWindow+5*time.Second, 0, 0)
+			return m, tea.Batch(m.verifyWake(value.operationID, value.result.Device), motionCmd, m.clockTick())
 		}
 		m.waking = false
 		m.prependWakeAttempt(value.result.Attempt)
@@ -467,6 +489,11 @@ func (m *WakeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lanPreparing = false
 		m.showNeighborForm(value)
 		return m, nil
+	case clockTickMsg:
+		if value.id != m.actionID || !m.waking {
+			return m, nil
+		}
+		return m, m.clockTick()
 	case wakeTickMsg:
 		if value.id != 0 && value.id != m.motionID {
 			return m, nil
@@ -656,8 +683,10 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 				m.filterInput = string(runes[:len(runes)-1])
 			}
 		default:
-			if runes := []rune(keyName); len(runes) == 1 && unicode.IsPrint(runes[0]) {
-				m.filterInput += keyName
+			for _, r := range msg.Key().Text {
+				if unicode.IsPrint(r) {
+					m.filterInput += string(r)
+				}
 			}
 		}
 		return nil
@@ -696,7 +725,7 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	case "v":
 		m.cycleState()
 		return nil
-	case " ":
+	case " ", "space":
 		m.toggleMarked()
 		return nil
 	case "W":
@@ -769,6 +798,10 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.status = "Type a filter, then press Enter."
 	case "?":
 		m.showHelp = true
+	case "t":
+		m.theme = m.theme.NextPreset()
+		m.status = "Theme: " + m.theme.PresetName()
+		return nil
 	case "esc":
 		m.marked = make(map[string]bool)
 		m.filter = ""
@@ -872,6 +905,16 @@ func (m *WakeModel) stopMotion() {
 	m.motion.Until = time.Time{}
 }
 
+// clockTick keeps the countdown moving when motion ticks are not running.
+// It stops on its own once the wake finishes or another action starts.
+func (m *WakeModel) clockTick() tea.Cmd {
+	if !m.waking || m.motion.Active(time.Now()) {
+		return nil
+	}
+	id := m.actionID
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return clockTickMsg{id: id} })
+}
+
 func (m *WakeModel) motionTick() tea.Cmd {
 	now := time.Now()
 	if !m.motion.Active(now) {
@@ -909,13 +952,50 @@ func (m *WakeModel) versionMark() string {
 }
 
 func (m *WakeModel) brandMark() string {
-	if m.theme.ASCII {
+	if m.theme.ASCII || !m.theme.Colors {
 		return m.theme.title().Render("wol")
 	}
-	return m.theme.cyan().Render("⚡ wol command center")
+	return m.theme.ribbon().Render(" ◆ wol · wake desk ")
 }
 
-func (m *WakeModel) View() string {
+func (m *WakeModel) renderHelpPanel(width int) string {
+	helpLines := []string{
+		"enter   choose wake, stream, check, or power off",
+		"w / c   wake only / wake and stream",
+		"P / x   power off / disconnect stream",
+		"s / r   check selected power / refresh fleet",
+		"n       discover LAN neighbors via ARP",
+		"a e d   add, edit, delete record",
+		"p       configure remote profile",
+		"tab     switch machines / routes / activity / sites",
+		"[ ] / v cycle site filter / cycle status filter",
+		"space   mark host; W batch wake; S batch check",
+		"R / b   retry failed batch / view batch results",
+		"i / E   import / export inventory JSON",
+		"t       cycle color theme (" + m.theme.PresetName() + ")",
+		"/       search filter",
+		"q       quit",
+	}
+	maxHelp := len(helpLines)
+	if m.height > 0 {
+		avail := max(4, m.height-10)
+		if avail < maxHelp {
+			helpLines = helpLines[:avail]
+		}
+	}
+	return renderPanel(m.theme, m.theme.Glyph("diamond")+" KEYS", "v"+m.version+"  "+m.credit, strings.Join(helpLines, "\n"), width)
+}
+
+// View wraps the rendered frame in a full-screen Bubble Tea view.
+func (m *WakeModel) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	v.WindowTitle = "wol"
+	return v
+}
+
+// render draws the current frame as a styled string.
+func (m *WakeModel) render() string {
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -928,6 +1008,10 @@ func (m *WakeModel) View() string {
 	if m.opening {
 		return m.renderRemoteLoadingView(inner, mode)
 	}
+	if m.spotlightEligible(width, m.height) {
+		return m.renderSpotlight(width, m.height)
+	}
+
 	var builder strings.Builder
 	var headerParts []string
 	headerParts = append(headerParts, m.brandMark())
@@ -937,33 +1021,52 @@ func (m *WakeModel) View() string {
 	if m.stale {
 		headerParts = append(headerParts, m.theme.danger().Render("STALE"))
 	}
-	headerParts = append(headerParts, m.theme.muted().Render(m.freshnessText()))
-	if m.siteFilter != "" {
-		headerParts = append(headerParts, m.privateField(m.siteName(m.siteFilter)))
-	}
-	if m.stateFilter != "" {
-		headerParts = append(headerParts, m.stateFilter)
+	if m.redactIdentifiers {
+		headerParts = append(headerParts, m.theme.amber().Render("[REDACT]"))
 	}
 	if len(m.marked) > 0 {
-		headerParts = append(headerParts, fmt.Sprintf("%d selected", len(m.marked)))
+		headerParts = append(headerParts, m.theme.amber().Render(fmt.Sprintf("%d selected", len(m.marked))))
 	}
-	builder.WriteString("\n" + fitText(strings.Join(headerParts, "  "), inner) + "\n")
+
+	var filterChips []string
+	if m.siteFilter != "" {
+		filterChips = append(filterChips, "site:"+m.privateField(m.siteName(m.siteFilter)))
+	}
+	if m.stateFilter != "" {
+		filterChips = append(filterChips, "state:"+m.stateFilter)
+	}
+	if m.filter != "" {
+		filterChips = append(filterChips, "/"+m.privateField(m.filter))
+	}
+	tabMeta := ""
+	if len(filterChips) > 0 {
+		if inner >= 72 {
+			tabMeta = m.theme.amber().Render(strings.Join(filterChips, "  "))
+		} else {
+			headerParts = append(headerParts, strings.Join(filterChips, " "))
+		}
+	}
+
+	rightFresh := m.theme.muted().Render(m.freshnessText())
+	builder.WriteString(renderHeaderRibbon(m.theme, headerParts, rightFresh, inner) + "\n")
 
 	showTabs := inner >= 36 && (m.height <= 0 || m.height >= 20 || m.tab != 0 || m.form != nil)
 	if showTabs {
-		builder.WriteString(renderTabs(m.theme, m.tab, []string{"machines", "routes", "activity", "sites"}, inner) + "\n")
+		builder.WriteString(renderTabRibbon(m.theme, m.tab, []string{"machines", "routes", "activity", "sites"}, tabMeta, inner) + "\n")
+	}
+	if m.height <= 0 || m.height >= 30 {
+		builder.WriteByte('\n')
 	}
 
 	if m.showBatchResults {
-		builder.WriteString("\n" + m.renderBatchResults(inner))
+		builder.WriteString(m.renderBatchResults(inner))
 	} else if m.batchKind != "" && !m.batchRunning {
-		builder.WriteString("\n" + m.renderBatchPreview(inner))
+		builder.WriteString(m.renderBatchPreview(inner))
 	} else if m.form != nil {
-		builder.WriteString("\n" + m.renderForm(inner))
+		builder.WriteString(m.renderForm(inner))
 	} else if m.lanOpen && m.tab == 0 {
-		builder.WriteString("\n" + m.renderLANDiscover(inner))
+		builder.WriteString(m.renderLANDiscover(inner))
 	} else {
-		builder.WriteString("\n")
 		switch m.tab {
 		case 1:
 			builder.WriteString(m.renderRoutes(inner))
@@ -975,6 +1078,7 @@ func (m *WakeModel) View() string {
 			builder.WriteString(m.renderMachines(inner, mode))
 		}
 	}
+
 	showStatus := m.height <= 0 || m.height >= 22 || m.loading || m.waking || m.opening || m.shuttingDown || m.checking || statusNeedsAttention(m.status)
 	if m.status != "" && showStatus {
 		status := m.privateMessage(m.status)
@@ -988,38 +1092,20 @@ func (m *WakeModel) View() string {
 		builder.WriteString("\n" + renderNotice(m.theme, fitText(status, inner), inner))
 	}
 	if m.filtering {
-		builder.WriteString("\n" + m.theme.accent().Render("filter  "+m.privateField(m.filterInput)+"_"))
+		builder.WriteString("\n" + fitText(m.theme.accent().Render("filter  "+m.privateField(m.filterInput)+"_"), inner))
 	}
 	if m.confirm != "" {
 		builder.WriteString("\n" + renderPanel(m.theme, "delete", "", "y confirm   n cancel", inner))
 	}
 	if m.showHelp {
-		builder.WriteString("\n" + renderPanel(m.theme, "keys", "v"+m.version+"  "+m.credit, strings.Join([]string{
-			"enter   choose wake, stream, check, or power off",
-			"w       wake",
-			"c       wake and stream / remote",
-			"P       power off / schedule shutdown",
-			"x       disconnect stream",
-			"s       check power",
-			"p       remote setup",
-			"r       refresh",
-			"n       discover LAN",
-			"a e d   add, edit, delete",
-			"tab     machines / routes / activity / sites",
-			"[ ]     cycle site filter; v cycles status",
-			"space   select machine; W wake selected; S check selected",
-			"R       retry failed batch targets; b views batch results",
-			"i / E   import / export inventory",
-			"/       filter",
-			"q       quit",
-		}, "\n"), inner))
+		builder.WriteString("\n" + m.renderHelpPanel(inner))
 	}
 	if inner >= 48 && (m.height <= 0 || m.height >= 22) {
 		div := strings.Repeat("─", inner)
 		if m.theme.ASCII {
 			div = strings.Repeat("-", inner)
 		}
-		builder.WriteString("\n" + m.theme.muted().Render(div) + "\n" + m.footer(inner) + "\n")
+		builder.WriteString("\n" + m.theme.cardLine().Render(div) + "\n" + m.footer(inner) + "\n")
 	} else {
 		builder.WriteString("\n\n" + m.footer(inner) + "\n")
 	}

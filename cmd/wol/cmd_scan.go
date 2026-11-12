@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	config "github.com/aklkbqx/wol/internal/networkconfig"
 	"github.com/aklkbqx/wol/internal/scanner"
 	"github.com/aklkbqx/wol/internal/store"
@@ -23,31 +24,31 @@ func runScan(args []string) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	fmt.Println(ui.RenderHeader("LAN SCAN", "ARP neighbors on local ethernet/wifi interfaces"))
+	lipgloss.Fprintln(os.Stdout, ui.RenderHeader("LAN SCAN", "ARP neighbors on local ethernet/wifi interfaces"))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	neighbors, err := scanner.ScanLAN(ctx)
 	if err != nil {
-		fmt.Println(ui.StyleDanger.Render("✖ LAN neighbor scan failed: " + err.Error()))
+		lipgloss.Fprintln(os.Stdout, ui.StyleDanger.Render("✖ LAN neighbor scan failed: "+err.Error()))
 		return 1
 	}
 
 	repository, err := store.Open(*databasePath)
 	if err != nil {
-		fmt.Println(ui.StyleDanger.Render("✖ could not open local inventory"))
+		lipgloss.Fprintln(os.Stdout, ui.StyleDanger.Render("✖ could not open local inventory"))
 		return 1
 	}
 	defer repository.Close()
 	devices, err := repository.ListDevices(ctx)
 	if err != nil {
-		fmt.Println(ui.StyleDanger.Render("✖ list inventory: " + err.Error()))
+		lipgloss.Fprintln(os.Stdout, ui.StyleDanger.Render("✖ list inventory: "+err.Error()))
 		return 1
 	}
 
 	known, moved, unknown := scanner.ClassifyLAN(devices, neighbors)
 	if _, err := scanner.SyncDeviceIPs(ctx, repository, devices, neighbors); err != nil {
-		fmt.Println(ui.StyleDanger.Render("✖ sync inventory: " + err.Error()))
+		lipgloss.Fprintln(os.Stdout, ui.StyleDanger.Render("✖ sync inventory: "+err.Error()))
 		return 1
 	}
 
@@ -62,9 +63,9 @@ func runScan(args []string) int {
 		rows = append(rows, lanRow(neighbor.IP, neighbor.MAC, "", "new"))
 	}
 	if len(rows) == 0 {
-		fmt.Println(ui.StyleWarning.Render("No LAN neighbors with complete ARP entries."))
+		lipgloss.Fprintln(os.Stdout, ui.StyleWarning.Render("No LAN neighbors with complete ARP entries."))
 	} else {
-		fmt.Println(ui.RenderBox(fmt.Sprintf("LAN NEIGHBORS (%s)", scanner.GetLocalIP()), rows))
+		lipgloss.Fprintln(os.Stdout, ui.RenderBox(fmt.Sprintf("LAN NEIGHBORS (%s)", scanner.GetLocalIP()), rows))
 	}
 
 	if *addUnknown && len(unknown) > 0 {
@@ -90,7 +91,7 @@ func runScan(args []string) int {
 			})
 			addCancel()
 			if err != nil {
-				fmt.Println(ui.StyleDanger.Render("✖ add " + neighbor.IP + ": " + err.Error()))
+				lipgloss.Fprintln(os.Stdout, ui.StyleDanger.Render("✖ add "+neighbor.IP+": "+err.Error()))
 				continue
 			}
 			devices = append(devices, item)
@@ -102,7 +103,7 @@ func runScan(args []string) int {
 			return 1
 		}
 	} else if len(unknown) > 0 {
-		fmt.Println(ui.StyleMuted.Render("New hosts are not stored yet. Re-run with --add to import them."))
+		lipgloss.Fprintln(os.Stdout, ui.StyleMuted.Render("New hosts are not stored yet. Re-run with --add to import them."))
 	}
 
 	cwd, err := os.Getwd()
@@ -129,7 +130,7 @@ func runScan(args []string) int {
 			fmt.Sprintf("%s  %s", statusBadge, ui.StyleMuted.Render(t.Details)),
 		})
 	}
-	fmt.Println(ui.RenderBox("CONFIGURED TARGETS", extra))
+	lipgloss.Fprintln(os.Stdout, ui.RenderBox("CONFIGURED TARGETS", extra))
 	return 0
 }
 

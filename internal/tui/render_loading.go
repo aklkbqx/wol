@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 func (m *WakeModel) renderRemoteLoadingView(width int, mode LayoutMode) string {
@@ -44,7 +44,7 @@ func (m *WakeModel) renderRemoteLoadingView(width int, mode LayoutMode) string {
 	body.WriteString(m.cyberWave(innerWidth) + "\n\n")
 	body.WriteString(m.theme.muted().Render("esc cancel   q quit"))
 
-	card := renderCardBox(m.theme, "⚡ REMOTE LAUNCHER", body.String(), cardWidth, 0)
+	card := renderShearedBox(m.theme, m.theme.Glyph("diamond")+" REMOTE PATCHBAY", "locked", body.String(), cardWidth, 0, true)
 	centered := centerBlock(card, width)
 	return "\n" + centered + "\n"
 }
@@ -71,7 +71,7 @@ func (m *WakeModel) renderLoadingView(width int, mode LayoutMode) string {
 		body.WriteString(m.theme.danger().Render("could not load") + "\n\n")
 		body.WriteString(fitText(message, innerWidth) + "\n\n")
 		body.WriteString(m.theme.accent().Render("r retry") + m.theme.muted().Render("   q quit"))
-		card := renderCardBox(m.theme, "⚠️  BOOT RECOVERY", body.String(), cardWidth, 0)
+		card := renderShearedBox(m.theme, m.theme.Glyph("diamond")+" BOOT RECOVERY", "error", body.String(), cardWidth, 0, true)
 		centered := centerBlock(card, width)
 		return "\n" + centered + "\n"
 	}
@@ -143,8 +143,8 @@ func (m *WakeModel) renderLoadingView(width int, mode LayoutMode) string {
 	body.WriteString(m.theme.accent().Render(spinner+" "+stage) + "\n\n")
 	body.WriteString(m.theme.muted().Render(controls))
 
-	headerTitle := "◈ " + badge
-	card := renderCardBox(m.theme, headerTitle, body.String(), cardWidth, 0)
+	headerTitle := m.theme.Glyph("diamond") + " " + badge
+	card := renderShearedBox(m.theme, headerTitle, m.theme.PresetName(), body.String(), cardWidth, 0, true)
 	centered := centerBlock(card, width)
 	return "\n" + centered + "\n"
 }

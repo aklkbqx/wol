@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/remoteopen"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *WakeModel) beginWake(force bool) tea.Cmd {
@@ -156,7 +156,7 @@ func (m *WakeModel) verifyWake(operationID uint64, device store.Device) tea.Cmd 
 	}
 	detector := m.presenceDetector()
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(parent, 90*time.Second)
+		ctx, cancel := context.WithTimeout(parent, wakeAnswerWindow)
 		defer cancel()
 		delays := []time.Duration{0, time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second, 8 * time.Second, 10 * time.Second}
 		for attempt := 0; ; attempt++ {

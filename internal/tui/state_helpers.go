@@ -5,10 +5,10 @@ import (
 	"net"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
 	"github.com/aklkbqx/wol/internal/wol"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func (m *WakeModel) filteredDevices() []store.Device {

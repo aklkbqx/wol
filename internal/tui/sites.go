@@ -1,11 +1,11 @@
 package tui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/aklkbqx/wol/internal/netutil"
-	tea "github.com/charmbracelet/bubbletea"
 	"io"
 	"net"
 	"os"
@@ -50,27 +50,51 @@ func (m *WakeModel) beginSite(edit bool) {
 	m.status = "Site defaults apply when machine fields are empty. Ctrl+N cycles relay choices."
 }
 func (m *WakeModel) renderSites(width int) string {
-	rows := []string{"Sites · a add · e edit · d delete · s check settings"}
-	start, end := m.listWindow(len(m.sites))
-	for i := start; i < end; i++ {
-		s := m.sites[i]
-		mark := " "
-		if i == m.selected {
-			mark = ">"
-		}
-		route := "direct"
-		if s.WakeRelayID != "" {
-			route = "relay"
-		}
-		rows = append(rows, fmt.Sprintf("%s %s · %s · %s", mark, m.privateField(s.Name), m.privateField(s.Subnet), route))
+	budget := m.bodyLineBudget()
+	framed := width >= 44 && budget >= 7
+	innerW := width
+	maxRows := budget
+	if framed {
+		innerW = width - 4
+		maxRows = max(3, budget-2)
 	}
+
+	rows := []string{m.theme.muted().Render(fitText("Sites · a add · e edit · d delete · s check settings", innerW))}
 	if len(m.sites) == 0 {
-		rows = append(rows, "Add Home, Lab or Office to organize networks.")
+		rows = append(rows, fitText("Add Home, Lab or Office to organize networks.", innerW))
+	} else {
+		limit := max(1, maxRows-1)
+		start := max(0, min(m.selected-limit/2, max(0, len(m.sites)-limit)))
+		end := min(len(m.sites), start+limit)
+		for i := start; i < end; i++ {
+			s := m.sites[i]
+			mark := " "
+			nameW := max(6, min(18, innerW/3))
+			name := padVisible(fitText(m.privateField(s.Name), nameW), nameW)
+			if i == m.selected {
+				mark = m.theme.accent().Render(m.theme.Glyph("arrow"))
+				name = m.theme.accent().Render(name)
+			}
+			route := "direct"
+			routeStyled := m.theme.cyan().Render("direct")
+			if s.WakeRelayID != "" {
+				route = "relay"
+				routeStyled = m.theme.amber().Render("relay")
+			}
+			subnet := m.privateField(s.Subnet)
+			if innerW < 48 {
+				rows = append(rows, fitText(fmt.Sprintf("%s %s · %s · %s", mark, m.privateField(s.Name), subnet, route), innerW))
+			} else {
+				rows = append(rows, fitText(fmt.Sprintf("%s %s  %s  %s", mark, name, padVisible(fitText(subnet, 18), 18), routeStyled), innerW))
+			}
+		}
 	}
-	for i := range rows {
-		rows[i] = fitText(rows[i], width)
+	body := strings.Join(rows, "\n")
+	if framed {
+		meta := fmt.Sprintf("%d sites", len(m.sites))
+		return renderShearedBox(m.theme, m.theme.Glyph("diamond")+" NETWORK SITES", meta, body, width, 0, true)
 	}
-	return strings.Join(rows, "\n")
+	return body
 }
 func (m *WakeModel) beginInventoryFile(export bool) {
 	kind := importForm
@@ -122,14 +146,6 @@ func inventoryFile(ctx context.Context, repo *store.Store, kind wakeFormKind, pa
 		return fmt.Errorf("expected one JSON document")
 	}
 	return repo.Import(ctx, data)
-}
-func (m *WakeModel) listWindow(count int) (int, int) {
-	limit := max(1, m.height-10)
-	start := max(0, m.selected-limit+1)
-	if start > count {
-		start = max(0, count-limit)
-	}
-	return start, min(count, start+limit)
 }
 
 type siteCheckMsg struct{ message string }

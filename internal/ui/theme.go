@@ -1,23 +1,59 @@
 package ui
 
 import (
+	"image/color"
+	"os"
 	"strings"
+	"sync"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
+	"golang.org/x/term"
 )
+
+// adaptive picks a light or dark variant at first use. The terminal is only
+// queried when both stdin and stdout are terminals and NO_COLOR is unset, so
+// pipes, tests and scripts never get a background query written to them.
+type adaptive struct{ light, dark color.Color }
+
+var (
+	darkOnce sync.Once
+	darkBg   = true
+)
+
+func hasDarkBackground() bool {
+	darkOnce.Do(func() {
+		if os.Getenv("NO_COLOR") != "" || !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+			return
+		}
+		darkBg = lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+	})
+	return darkBg
+}
+
+// RGBA satisfies color.Color.
+func (a adaptive) RGBA() (r, g, b, alpha uint32) {
+	if hasDarkBackground() {
+		return a.dark.RGBA()
+	}
+	return a.light.RGBA()
+}
+
+func adapt(light, dark string) color.Color {
+	return adaptive{light: lipgloss.Color(light), dark: lipgloss.Color(dark)}
+}
 
 // Color tokens for Cyber/Midnight theme
 var (
-	ColorPrimary   = lipgloss.AdaptiveColor{Light: "#0284c7", Dark: "#38bdf8"} // Sky Blue
-	ColorSecondary = lipgloss.AdaptiveColor{Light: "#6366f1", Dark: "#818cf8"} // Indigo
-	ColorAccent    = lipgloss.AdaptiveColor{Light: "#7c3aed", Dark: "#a855f7"} // Purple
-	ColorSuccess   = lipgloss.AdaptiveColor{Light: "#059669", Dark: "#34d399"} // Emerald Green
-	ColorWarning   = lipgloss.AdaptiveColor{Light: "#d97706", Dark: "#fbbf24"} // Amber
-	ColorDanger    = lipgloss.AdaptiveColor{Light: "#dc2626", Dark: "#f87171"} // Ruby Red
-	ColorMuted     = lipgloss.AdaptiveColor{Light: "#64748b", Dark: "#94a3b8"} // Slate
-	ColorSubtle    = lipgloss.AdaptiveColor{Light: "#94a3b8", Dark: "#475569"} // Darker Slate
-	ColorBg        = lipgloss.AdaptiveColor{Light: "#f8fafc", Dark: "#0f172a"} // Midnight Dark
-	ColorBorder    = lipgloss.AdaptiveColor{Light: "#cbd5e1", Dark: "#334155"} // Dark Slate
+	ColorPrimary   = adapt("#0284c7", "#38bdf8") // Sky Blue
+	ColorSecondary = adapt("#6366f1", "#818cf8") // Indigo
+	ColorAccent    = adapt("#7c3aed", "#a855f7") // Purple
+	ColorSuccess   = adapt("#059669", "#34d399") // Emerald Green
+	ColorWarning   = adapt("#d97706", "#fbbf24") // Amber
+	ColorDanger    = adapt("#dc2626", "#f87171") // Ruby Red
+	ColorMuted     = adapt("#64748b", "#94a3b8") // Slate
+	ColorSubtle    = adapt("#94a3b8", "#475569") // Darker Slate
+	ColorBg        = adapt("#f8fafc", "#0f172a") // Midnight Dark
+	ColorBorder    = adapt("#cbd5e1", "#334155") // Dark Slate
 )
 
 // Lip Gloss Base Styles
@@ -53,7 +89,7 @@ var (
 			Foreground(ColorPrimary)
 
 	StyleVal = lipgloss.NewStyle().
-			Foreground(lipgloss.AdaptiveColor{Light: "#0f172a", Dark: "#f8fafc"})
+			Foreground(adapt("#0f172a", "#f8fafc"))
 
 	StyleBox = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -86,8 +122,8 @@ var (
 )
 
 // Paint returns styled string based on ANSI escape codes or simple lipgloss style
-func Paint(color lipgloss.TerminalColor, text string) string {
-	return lipgloss.NewStyle().Foreground(color).Render(text)
+func Paint(c color.Color, text string) string {
+	return lipgloss.NewStyle().Foreground(c).Render(text)
 }
 
 // Badge formats a text badge

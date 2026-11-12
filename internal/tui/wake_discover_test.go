@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func TestLANDiscoverRefreshesRemoteHost(t *testing.T) {
@@ -36,7 +36,7 @@ func TestLANDiscoverFitsNarrowTerminal(t *testing.T) {
 		}
 		for _, width := range []int{8, 18, 24, 40, 80} {
 			m.width = width
-			for _, line := range strings.Split(m.View(), "\n") {
+			for _, line := range strings.Split(m.render(), "\n") {
 				if lipgloss.Width(stripANSI(line)) > width {
 					t.Fatalf("width %d count %d overflow: %q", width, count, line)
 				}

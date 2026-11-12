@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func TestWakeDeskViewFitsTerminalWidths(t *testing.T) {
@@ -49,7 +49,7 @@ func TestWakeDeskViewFitsTerminalWidths(t *testing.T) {
 			model.theme = NewTheme(colors, !colors)
 			for _, tab := range []int{0, 1, 2} {
 				model.tab = tab
-				view := model.View()
+				view := model.render()
 				for lineNo, line := range strings.Split(view, "\n") {
 					if got := lipgloss.Width(stripANSI(line)); got > width {
 						t.Fatalf("width %d tab %d line %d overflows at %d: %q", width, tab, lineNo, got, line)
@@ -58,7 +58,7 @@ func TestWakeDeskViewFitsTerminalWidths(t *testing.T) {
 			}
 		}
 	}
-	view := model.View()
+	view := model.render()
 	if !strings.Contains(view, "wol") {
 		t.Fatalf("wake desk header missing:\n%s", view)
 	}
@@ -73,12 +73,12 @@ func TestWakeDeskSignalPathOnlyAppearsDuringWake(t *testing.T) {
 		devices:  []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", BroadcastAddress: "192.168.50.255", Enabled: true}},
 		presence: map[string]string{"one": "offline"},
 	}
-	if view := model.View(); strings.Contains(view, "DESK *-->") {
+	if view := model.render(); strings.Contains(view, "DESK *-->") {
 		t.Fatalf("idle view contains an animated signal path:\n%s", view)
 	}
 	model.waking = true
 	model.motion.Trigger(time.Now(), time.Second)
-	view := model.View()
+	view := model.render()
 	if !strings.Contains(view, "DESK *--> LAN --> WINDOWS") {
 		t.Fatalf("wake view missing signal path:\n%s", view)
 	}
@@ -110,11 +110,11 @@ func TestActiveActionPinsInspectorAndLocksNavigation(t *testing.T) {
 		presence: map[string]string{}, profiles: map[string]store.RemoteProfile{}, selected: 1,
 		waking: true, actionID: 4, actionTargetID: "windows", actionTarget: "windows", action: "wake-wait",
 	}
-	view := stripANSI(model.View())
+	view := stripANSI(model.render())
 	if !strings.Contains(view, "locked") || !strings.Contains(view, "windows") || strings.Contains(view, "> private2") {
 		t.Fatalf("active action was not target-bound after navigation:\n%s", view)
 	}
-	model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	model.handleKey(tea.KeyPressMsg{Code: tea.KeyDown})
 	if model.selected != 1 || !strings.Contains(model.status, "selection is locked") {
 		t.Fatalf("active action allowed navigation: selected=%d status=%q", model.selected, model.status)
 	}
@@ -127,7 +127,7 @@ func TestWakeAndRemoteUsesFullScreenLoadingUntilBrowserOpens(t *testing.T) {
 			devices: []store.Device{{ID: "windows", Name: "windows", Enabled: true}}, presence: map[string]string{"windows": "offline"},
 			profiles: map[string]store.RemoteProfile{}, opening: true, actionTargetID: "windows", actionTarget: "windows", action: "wake-remote",
 		}
-		view := stripANSI(model.View())
+		view := stripANSI(model.render())
 		if !strings.Contains(view, "windows") || !strings.Contains(view, "WAKE") || !strings.Contains(view, "WAIT") || !(strings.Contains(view, "REMOTE") || strings.Contains(view, "STREAM")) {
 			t.Fatalf("%dx%d remote loading lost essential state:\n%s", size.width, size.height, view)
 		}
@@ -156,7 +156,7 @@ func TestCompactWakeDeskFitsShortTerminalHeight(t *testing.T) {
 		presence: map[string]string{"one": "online", "two": "unknown", "three": "offline"},
 		status:   "Power scan complete.",
 	}
-	view := model.View()
+	view := model.render()
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
 		t.Fatalf("compact view uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
 	}
@@ -176,7 +176,7 @@ func TestShortWideTerminalUsesCompactLayout(t *testing.T) {
 		presence: map[string]string{"one": "online", "two": "offline"},
 		status:   "Power scan complete.",
 	}
-	view := model.View()
+	view := model.render()
 	if ResolveLayout(model.width, model.height) != LayoutCompact || strings.Contains(view, "ACTION DECK") {
 		t.Fatalf("short terminal did not choose compact layout:\n%s", view)
 	}
@@ -198,7 +198,7 @@ func TestMachineViewportFitsLargeInventories(t *testing.T) {
 	}
 	for _, size := range []struct{ width, height int }{{40, 20}, {80, 20}, {120, 30}} {
 		model := &WakeModel{width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false), devices: devices, presence: presenceStates, selected: len(devices) - 1, status: "Power scan complete."}
-		view := model.View()
+		view := model.render()
 		if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
 			t.Fatalf("%dx%d large inventory uses %d lines:\n%s", size.width, size.height, lines, view)
 		}
@@ -219,13 +219,13 @@ func TestWakeDeskKeyboardNavigationAndFilter(t *testing.T) {
 		devices:  []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", Enabled: true}, {ID: "two", Name: "private", MACAddress: "00:11:22:33:44:66", Enabled: true}},
 		presence: map[string]string{}, status: "ready",
 	}
-	model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	model.handleKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	if model.selected != 1 {
 		t.Fatalf("j selected %d, want 1", model.selected)
 	}
-	model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
-	model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
-	model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	model.handleKey(tea.KeyPressMsg{Code: '/', Text: "/"})
+	model.handleKey(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if model.filter != "p" || model.filtering {
 		t.Fatalf("filter state = %q/%v, want p/false", model.filter, model.filtering)
 	}
@@ -248,7 +248,7 @@ func TestWakeDeskShowsPowerAndWakeStatesSeparately(t *testing.T) {
 		profiles: map[string]store.RemoteProfile{"online": {DeviceID: "online", Protocol: "rdp", Host: "192.168.50.200", Port: 3389, VerifyPort: 3389, Mode: "browser-local", Enabled: true}},
 		status:   "ready",
 	}
-	view := model.View()
+	view := model.render()
 	for _, want := range []string{"online", "unknown", "unreachable", "setup", "blocked", "remote", "192.168.50.200"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
@@ -319,11 +319,11 @@ func TestEnterOnlyOpensActionPicker(t *testing.T) {
 		devices:  []store.Device{{ID: "one", Name: "windows", MACAddress: "00:11:22:33:44:55", Enabled: true}},
 		presence: map[string]string{"one": "online"},
 	}
-	cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := model.handleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd != nil || !model.actionPicker || model.opening || model.waking || model.checking {
 		t.Fatalf("Enter executed work: picker=%v opening=%v waking=%v checking=%v", model.actionPicker, model.opening, model.waking, model.checking)
 	}
-	view := model.View()
+	view := model.render()
 	for _, want := range []string{"wake", "stream", "check", "power off", "cancel"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("picker missing %q:\n%s", want, view)
@@ -382,13 +382,13 @@ func TestFixedShortcutsNeverChangeMeaning(t *testing.T) {
 	newModel := func() *WakeModel {
 		return &WakeModel{devices: []store.Device{device}, profiles: map[string]store.RemoteProfile{"one": profile}, presence: map[string]string{}, motion: NewMotion(false), service: &wakeservice.Service{}, wakeAndRemote: func(context.Context, store.Device, store.RemoteProfile) error { return nil }}
 	}
-	if model := newModel(); model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}}) == nil || !model.waking || model.opening {
+	if model := newModel(); model.handleKey(tea.KeyPressMsg{Code: 'w', Text: "w"}) == nil || !model.waking || model.opening {
 		t.Fatalf("w did not mean wake only")
 	}
-	if model := newModel(); model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}) == nil || !model.opening || model.waking {
+	if model := newModel(); model.handleKey(tea.KeyPressMsg{Code: 'c', Text: "c"}) == nil || !model.opening || model.waking {
 		t.Fatalf("c did not mean wake and remote")
 	}
-	if model := newModel(); model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}}) == nil || !model.checking || model.waking || model.opening {
+	if model := newModel(); model.handleKey(tea.KeyPressMsg{Code: 's', Text: "s"}) == nil || !model.checking || model.waking || model.opening {
 		t.Fatalf("s did not mean check power")
 	}
 }
@@ -413,7 +413,7 @@ func TestEscapeCancelsWakeAndRemoteContext(t *testing.T) {
 		done <- msg
 	}()
 	<-started
-	model.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	select {
 	case msg := <-done:
 		model.Update(msg)
@@ -503,7 +503,7 @@ func TestMachineEditPreservesMetadataWithoutHostedRemoteField(t *testing.T) {
 func TestMachineFormFitsShortTerminal(t *testing.T) {
 	model := &WakeModel{width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(false), presence: map[string]string{}}
 	model.beginAdd()
-	view := model.View()
+	view := model.render()
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > model.height {
 		t.Fatalf("machine form uses %d lines in a %d-line terminal:\n%s", lines, model.height, view)
 	}
@@ -511,7 +511,7 @@ func TestMachineFormFitsShortTerminal(t *testing.T) {
 		t.Fatalf("short form does not explain hidden fields:\n%s", view)
 	}
 	model.form.selected = len(model.form.labels) - 1
-	view = model.View()
+	view = model.render()
 	if !strings.Contains(view, "Site name") || !strings.Contains(view, "earlier field") {
 		t.Fatalf("short form did not scroll to selected final field:\n%s", view)
 	}
@@ -527,8 +527,8 @@ func TestWakeAndRemoteRequiresLocalProfileAndRuntime(t *testing.T) {
 	if cmd := model.beginWakeAndRemote(); cmd != nil || !strings.Contains(model.status, "remote doctor") {
 		t.Fatalf("missing runtime guidance = %q", model.status)
 	}
-	if strings.Contains(strings.ToLower(model.View()), "http://") || strings.Contains(strings.ToLower(model.View()), "https://") || strings.Contains(strings.ToLower(model.View()), "aklkbqx.com") {
-		t.Fatalf("TUI exposed an external URL/domain:\n%s", model.View())
+	if strings.Contains(strings.ToLower(model.render()), "http://") || strings.Contains(strings.ToLower(model.render()), "https://") || strings.Contains(strings.ToLower(model.render()), "aklkbqx.com") {
+		t.Fatalf("TUI exposed an external URL/domain:\n%s", model.render())
 	}
 }
 
@@ -570,7 +570,7 @@ func TestActionPickerFitsResponsiveViewports(t *testing.T) {
 	device := store.Device{ID: "one", Name: "a-very-long-workstation-name", MACAddress: "00:11:22:33:44:55", IPAddress: "192.168.50.200", Enabled: true}
 	for _, size := range []struct{ width, height int }{{18, 20}, {40, 20}, {80, 24}, {120, 30}, {120, 34}} {
 		model := &WakeModel{width: size.width, height: size.height, theme: NewTheme(false, true), motion: NewMotion(false), devices: []store.Device{device}, presence: map[string]string{}, actionPicker: true}
-		view := model.View()
+		view := model.render()
 		if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
 			t.Fatalf("%dx%d picker uses %d lines:\n%s", size.width, size.height, lines, view)
 		}
@@ -607,7 +607,7 @@ func TestStartupShowsInventoryWhileProbesStream(t *testing.T) {
 	if model.phase != phaseReady || len(model.devices) != 1 || model.pending != nil {
 		t.Fatalf("inventory leaked before verification: phase=%v devices=%d pending=%v", model.phase, len(model.devices), model.pending != nil)
 	}
-	if view := model.View(); !strings.Contains(view, "windows") || !strings.Contains(view, "Checking") {
+	if view := model.render(); !strings.Contains(view, "windows") || !strings.Contains(view, "Checking") {
 		t.Fatalf("startup exposed the dashboard before verification:\n%s", view)
 	}
 	result, ok := scan().(fleetMsg)
@@ -621,7 +621,7 @@ func TestStartupShowsInventoryWhileProbesStream(t *testing.T) {
 	if model.phase != phaseReady || len(model.devices) != 1 || model.presence[model.devices[0].ID] != "online" || model.checkedAt.IsZero() {
 		t.Fatalf("verified snapshot was not committed: phase=%v devices=%d presence=%v checked=%v", model.phase, len(model.devices), model.presence, model.checkedAt)
 	}
-	if view := model.View(); !strings.Contains(view, "windows") || strings.Contains(view, "reading inventory") {
+	if view := model.render(); !strings.Contains(view, "windows") || strings.Contains(view, "reading inventory") {
 		t.Fatalf("verified dashboard did not replace loading:\n%s", view)
 	}
 }
@@ -639,7 +639,7 @@ func TestRefreshFailureKeepsLastVerifiedSnapshot(t *testing.T) {
 	if model.phase != phaseReady || len(model.devices) != 1 || model.devices[0].ID != "old" || model.presence["old"] != "online" || !model.stale || !model.checkedAt.Equal(checked) {
 		t.Fatalf("refresh failure damaged snapshot: phase=%v devices=%v presence=%v stale=%v checked=%v", model.phase, model.devices, model.presence, model.stale, model.checkedAt)
 	}
-	if view := model.View(); !strings.Contains(view, "STALE") || !strings.Contains(view, "saved") {
+	if view := model.render(); !strings.Contains(view, "STALE") || !strings.Contains(view, "saved") {
 		t.Fatalf("stale recovery is not visible:\n%s", view)
 	}
 }
@@ -666,7 +666,7 @@ func TestSinglePowerCheckKeepsInventoryInteractive(t *testing.T) {
 	if model.phase != phaseReady || model.presence["one"] != "offline" {
 		t.Fatalf("focused check changed visible state early: phase=%v presence=%v", model.phase, model.presence)
 	}
-	if view := model.View(); !strings.Contains(view, "Checking power") || !strings.Contains(view, "windows") || !strings.Contains(view, "enter choose") {
+	if view := model.render(); !strings.Contains(view, "Checking power") || !strings.Contains(view, "windows") || !strings.Contains(view, "enter choose") {
 		t.Fatalf("focused check view is unclear:\n%s", view)
 	}
 	message, ok := cmd().(probeResultMsg)
@@ -687,7 +687,7 @@ func TestLoadingAndErrorViewsFitResponsiveTerminals(t *testing.T) {
 				phase: phase, loading: phase != phaseLoadError, loadingStage: stagePresence, loadingTarget: "a-very-long-workstation-name", loadingError: "Could not read the local inventory.",
 				devices: []store.Device{{ID: "one", Name: "saved"}}, pending: &wakeDataMsg{devices: []store.Device{{ID: "pending"}}},
 			}
-			view := model.View()
+			view := model.render()
 			if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > size.height {
 				t.Fatalf("%dx%d phase %v uses %d lines:\n%s", size.width, size.height, phase, lines, view)
 			}
@@ -720,7 +720,7 @@ func TestEscapeCancelsRefreshAndRejectsItsLateResult(t *testing.T) {
 		devices: []store.Device{device}, presence: map[string]string{"verified": "online"},
 	}
 
-	model.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	model.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if model.phase != phaseReady || model.loading || model.requestID != 8 || !strings.Contains(model.status, "cancelled") {
 		t.Fatalf("refresh cancel state is wrong: phase=%v loading=%v request=%d status=%q", model.phase, model.loading, model.requestID, model.status)
 	}
@@ -742,7 +742,7 @@ func TestBootFailureOffersRetryWithoutExposingDashboard(t *testing.T) {
 		phase: phaseBootLoading, loading: true, loadingKind: loadingBoot, requestID: 3,
 	}
 	model.Update(wakeDataMsg{requestID: 3, kind: loadingBoot, err: fmt.Errorf("database unavailable")})
-	view := model.View()
+	view := model.render()
 	if model.phase != phaseLoadError || !strings.Contains(view, "r retry") || strings.Contains(view, "windows") {
 		t.Fatalf("boot recovery view is wrong:\n%s", view)
 	}
@@ -837,13 +837,13 @@ func TestHandleKeyJStartsSelectMotionTick(t *testing.T) {
 		width: 80, height: 24, theme: NewTheme(false, true), motion: NewMotion(true), phase: phaseReady,
 		devices: []store.Device{{ID: "one", Name: "windows", Enabled: true}, {ID: "two", Name: "private", Enabled: true}},
 	}
-	cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	cmd := model.handleKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	if cmd == nil || model.selected != 1 || model.motion.Stage != StageSelect || !model.motion.Active(time.Now()) {
 		t.Fatalf("j did not start select motion: selected=%d stage=%v cmd=%v", model.selected, model.motion.Stage, cmd)
 	}
 	model.motion = NewMotion(false)
 	model.selected = 0
-	if cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}}); cmd != nil {
+	if cmd := model.handleKey(tea.KeyPressMsg{Code: 'j', Text: "j"}); cmd != nil {
 		t.Fatalf("reduced-motion j returned a tick")
 	}
 }
@@ -877,20 +877,20 @@ func TestMachineFormInteractiveTextInput(t *testing.T) {
 		t.Fatal("form is nil after beginAdd")
 	}
 	for _, ch := range "node-1" {
-		model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		model.Update(tea.KeyPressMsg{Code: ch, Text: string(ch)})
 	}
 	if got := model.form.values[0]; got != "node-1" {
 		t.Fatalf("expected form.values[0] = 'node-1', got %q", got)
 	}
-	model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if model.form.selected != 1 {
 		t.Fatalf("expected form.selected = 1, got %d", model.form.selected)
 	}
-	model.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	model.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if model.form.selected != 0 {
 		t.Fatalf("expected form.selected = 0, got %d", model.form.selected)
 	}
-	model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if model.form != nil {
 		t.Fatal("expected form to be closed after Esc")
 	}
@@ -937,7 +937,7 @@ func TestWakeWaitSignalPathAnimatesContinuously(t *testing.T) {
 func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 	started := time.Unix(1_700_000_000, 0)
 	model := &WakeModel{
-		width: 100, height: 30,
+		width: 88, height: 30, // classic list; Spotlight has its own waking stage
 		theme:          NewTheme(true, false),
 		action:         "wake-wait",
 		actionTargetID: "win-1",
@@ -953,7 +953,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 			Until: started.Add(95 * time.Second),
 		},
 	}
-	view0 := model.View()
+	view0 := model.render()
 	if !strings.Contains(view0, "waking") {
 		t.Fatalf("fleet view expected to contain 'waking' during wake-wait:\n%s", view0)
 	}
@@ -963,7 +963,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 
 	// Advance frame
 	model.frame = 4
-	view4 := model.View()
+	view4 := model.render()
 	if !strings.Contains(view4, "⠹ waking") {
 		t.Fatalf("fleet view expected to contain rotated spinner frame '⠹ waking':\n%s", view4)
 	}
@@ -972,7 +972,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 	asciiModel := model
 	asciiModel.theme = NewTheme(false, true)
 	asciiModel.frame = 0
-	asciiView := asciiModel.View()
+	asciiView := asciiModel.render()
 	if !strings.Contains(asciiView, "waking") {
 		t.Fatalf("ASCII fleet view expected to contain 'waking':\n%s", asciiView)
 	}
@@ -980,7 +980,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 
 func assertViewFits(t *testing.T, model *WakeModel, width, height int) {
 	t.Helper()
-	view := model.View()
+	view := model.render()
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > height {
 		t.Fatalf("%dx%d uses %d lines:\n%s", width, height, lines, view)
 	}
@@ -1030,7 +1030,7 @@ func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
 	}
 
 	// Check view during shutdown
-	view := model.View()
+	view := model.render()
 	if !strings.Contains(view, "stop") && !strings.Contains(view, "stopping") {
 		t.Fatalf("expected view to contain stop/stopping animation, got:\n%s", view)
 	}
@@ -1040,7 +1040,7 @@ func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
 
 	// 2. Key lockout during shuttingDown
 	for _, key := range []string{"p", "P", "a", "e", "d", "r", "s", "enter", "?"} {
-		cmd := model.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+		cmd := model.handleKey(testKey(key))
 		if cmd != nil {
 			t.Fatalf("expected key %q to be locked out during shutdown, but got cmd", key)
 		}
@@ -1067,7 +1067,7 @@ func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
 		t.Fatalf("expected status to mention unreachable after shutdown, got %q", model.status)
 	}
 
-	offlineView := model.View()
+	offlineView := model.render()
 	if !strings.Contains(offlineView, "unreachable") {
 		t.Fatalf("expected offline view to display 'unreachable', got:\n%s", offlineView)
 	}
@@ -1114,9 +1114,23 @@ func BenchmarkWakeModelView(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		out := model.View()
+		out := model.render()
 		if len(out) == 0 {
 			b.Fatal("empty view")
 		}
 	}
+}
+
+// testKey builds a key press for a single printable key or a named key.
+func testKey(key string) tea.KeyPressMsg {
+	switch key {
+	case "enter":
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "space":
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	}
+	r := []rune(key)[0]
+	return tea.KeyPressMsg{Code: r, Text: key}
 }

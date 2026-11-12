@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"charm.land/lipgloss/v2"
 	"github.com/aklkbqx/wol/internal/doctor"
 	config "github.com/aklkbqx/wol/internal/networkconfig"
 )
@@ -31,7 +32,7 @@ func runDoctor(args []string) int {
 		return 1
 	}
 	report := doctor.RunDoctorWithEnv(cwd, defaults)
-	fmt.Println(report.RenderReport())
+	lipgloss.Fprintln(os.Stdout, report.RenderReport())
 
 	hasFail := false
 	for _, it := range report.Items {

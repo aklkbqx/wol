@@ -11,11 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/aklkbqx/wol/internal/art"
 	"github.com/aklkbqx/wol/internal/power"
 	"github.com/aklkbqx/wol/internal/store"
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type wakeFormKind string
@@ -51,13 +52,7 @@ func newWakeForm(kind wakeFormKind, id string, labels []string, initialValues []
 		}
 		ti.SetValue(val)
 		values[i] = val
-		if theme.Colors {
-			ti.TextStyle = theme.base()
-			ti.Cursor.Style = theme.accent()
-		} else {
-			ti.TextStyle = lipgloss.NewStyle()
-			ti.Cursor.Style = lipgloss.NewStyle().Reverse(true)
-		}
+		styleInput(&ti, theme)
 		if i == 0 {
 			ti.Focus()
 		} else {
@@ -87,13 +82,7 @@ func (f *wakeForm) ensureInputs(theme Theme) {
 				val = f.values[i]
 			}
 			ti.SetValue(val)
-			if theme.Colors {
-				ti.TextStyle = theme.base()
-				ti.Cursor.Style = theme.accent()
-			} else {
-				ti.TextStyle = lipgloss.NewStyle()
-				ti.Cursor.Style = lipgloss.NewStyle().Reverse(true)
-			}
+			styleInput(&ti, theme)
 			if i == f.selected {
 				ti.Focus()
 			} else {
@@ -136,7 +125,7 @@ func (m *WakeModel) beginAdd() {
 		return
 	}
 	if m.tab == 0 {
-		values := make([]string, 10)
+		values := make([]string, len(deviceFormLabels()))
 		if m.siteFilter != "" && m.siteFilter != "unassigned" {
 			values[9] = m.siteName(m.siteFilter)
 		}
@@ -167,6 +156,7 @@ func (m *WakeModel) beginEdit() {
 			device.Name, device.MACAddress, device.IPAddress, device.BroadcastAddress,
 			strconv.Itoa(device.Port), device.Interface, strconv.Itoa(device.VerifyPort),
 			device.WakeStrategy, device.WakeRelayID, m.siteName(device.SiteID),
+			formKind(device.DeviceType), device.ImagePath,
 		}, m.theme)
 		m.status = "Edit machine: press Enter to advance and save."
 		return
@@ -325,9 +315,13 @@ func (m *WakeModel) handleFormKey(msg tea.KeyMsg) tea.Cmd {
 	name := msg.String()
 	if name == "ctrl+n" {
 		choices := []string{""}
-		if form.kind == deviceForm && form.selected == 9 {
+		if form.kind == deviceForm && form.selected == deviceFieldSite {
 			for _, s := range m.sites {
 				choices = append(choices, s.Name)
+			}
+		} else if form.kind == deviceForm && form.selected == deviceFieldType {
+			for _, k := range art.Kinds() {
+				choices = append(choices, string(k))
 			}
 		} else if (form.kind == siteForm && form.selected == 4) || (form.kind == deviceForm && form.selected == 8) {
 			for _, r := range m.relays {
@@ -631,6 +625,20 @@ func (m *WakeModel) saveForm() tea.Cmd {
 				item.WakeRelayID = r.ID
 			}
 		}
+		if len(values) > deviceFieldType {
+			kind, err := parseFormKind(values[deviceFieldType])
+			if err != nil {
+				return formSavedMsg{message: "Machine save failed: " + err.Error(), keep: true}
+			}
+			item.DeviceType = kind
+		}
+		if len(values) > deviceFieldPicture {
+			path, err := parseFormPicture(values[deviceFieldPicture])
+			if err != nil {
+				return formSavedMsg{message: "Machine save failed: picture " + err.Error() + ".", keep: true}
+			}
+			item.ImagePath = path
+		}
 		if len(values) > 9 {
 			oldSiteID := item.SiteID
 			item.SiteID = ""
@@ -671,8 +679,54 @@ func parseFormInt(value string, fallback int) (int, error) {
 	return parsed, nil
 }
 
+// Device form fields that have their own handling.
+const (
+	deviceFieldSite    = 9
+	deviceFieldType    = 10
+	deviceFieldPicture = 11
+)
+
 func deviceFormLabels() []string {
-	return []string{"Name", "MAC address", "IP address", "Broadcast", "UDP port", "Interface", "Verify port", "Wake strategy", "Relay name (Ctrl+N)", "Site name (Ctrl+N)"}
+	return []string{"Name", "MAC address", "IP address", "Broadcast", "UDP port", "Interface", "Verify port", "Wake strategy", "Relay name (Ctrl+N)", "Site name (Ctrl+N)", "Type (Ctrl+N)", "Picture file"}
+}
+
+// formKind shows a stored machine type in the form; empty means "guess
+// from the name".
+func formKind(stored string) string {
+	if k, ok := art.ParseKind(stored); ok {
+		return string(k)
+	}
+	return ""
+}
+
+// parseFormKind turns the Type field into the stored value.
+func parseFormKind(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "auto") {
+		return "unknown", nil
+	}
+	k, ok := art.ParseKind(value)
+	if !ok {
+		names := make([]string, 0, len(art.Kinds()))
+		for _, k := range art.Kinds() {
+			names = append(names, string(k))
+		}
+		return "", fmt.Errorf("type must be blank or one of %s", strings.Join(names, ", "))
+	}
+	return string(k), nil
+}
+
+// parseFormPicture checks the Picture file field and returns the absolute
+// path to store, or "" when the field is blank.
+func parseFormPicture(value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", nil
+	}
+	path := art.ExpandPath(value)
+	if err := art.CheckPhoto(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func relayFormLabels() []string {
@@ -711,46 +765,75 @@ func (m *WakeModel) renderForm(width int) string {
 		return ""
 	}
 	form.ensureInputs(m.theme)
-	start, end := 0, len(form.labels)
+	budget := m.bodyLineBudget()
+	framed := width >= 48 && budget >= 9
+	innerW := width
+	fieldBudget := max(3, budget-4)
+	if framed {
+		innerW = width - 4
+		fieldBudget = max(3, budget-5)
+	}
 	if m.height > 0 && m.height < 32 && len(form.labels) > 6 {
-		start = max(0, form.selected-3)
-		end = min(len(form.labels), start+6)
-		start = max(0, end-6)
+		fieldBudget = min(fieldBudget, 6)
+	}
+
+	start, end := 0, len(form.labels)
+	if m.height > 0 && len(form.labels) > fieldBudget {
+		start = max(0, form.selected-fieldBudget/2)
+		end = min(len(form.labels), start+fieldBudget)
+		start = max(0, end-fieldBudget)
 	}
 	rows := make([]string, 0, end-start+4)
-	rows = append(rows, m.theme.muted().Render("ctrl+s saves   tab moves   esc cancels"), "")
+	rows = append(rows, m.theme.muted().Render(fitText("ctrl+s saves   tab moves   esc cancels", innerW)))
 	if start > 0 {
-		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("%d earlier field(s)", start)))
+		rows = append(rows, m.theme.muted().Render(fitText(fmt.Sprintf("↑ %d earlier field(s)", start), innerW)))
 	}
 	for i := start; i < end; i++ {
 		label := form.labels[i]
 		marker := " "
+		labelStyled := m.theme.muted().Render(fmt.Sprintf("%-18s", fitText(label, 18)))
 		if i == form.selected {
-			marker = m.theme.Glyph("arrow")
+			marker = m.theme.accent().Render(m.theme.Glyph("arrow"))
+			labelStyled = m.theme.accent().Render(fmt.Sprintf("%-18s", fitText(label, 18)))
 		}
 		var val string
 		if i == form.selected && i < len(form.inputs) {
-			val = form.inputs[i].View()
+			if m.redactIdentifiers {
+				val = m.privateField(form.inputs[i].Value())
+			} else {
+				val = form.inputs[i].View()
+			}
 		} else if i < len(form.values) {
-			val = form.values[i]
+			val = m.privateField(form.values[i])
 		}
-		rows = append(rows, fmt.Sprintf("%s %-18s %s", marker, label, fitText(m.privateField(val), max(12, width-26))))
+		rows = append(rows, fitText(fmt.Sprintf("%s %s %s", marker, labelStyled, fitText(val, max(8, innerW-22))), innerW))
 	}
 	if end < len(form.labels) {
-		rows = append(rows, m.theme.muted().Render(fmt.Sprintf("%d more field(s)", len(form.labels)-end)))
+		rows = append(rows, m.theme.muted().Render(fitText(fmt.Sprintf("↓ %d more field(s)", len(form.labels)-end), innerW)))
 	}
 	if form.error != "" {
-		rows = append(rows, "", m.theme.danger().Render(m.privateMessage(form.error)))
+		rows = append(rows, m.theme.danger().Render(fitText(m.privateMessage(form.error), innerW)))
 	}
 	title := "machine"
-	if form.kind == relayForm {
+	switch form.kind {
+	case relayForm:
 		title = "route"
-	} else if form.kind == remoteProfileForm {
+	case remoteProfileForm:
 		title = "remote"
-	} else if form.kind == powerForm {
+	case powerForm:
 		title = "power off"
+	case siteForm:
+		title = "site"
+	case importForm:
+		title = "import inventory"
+	case exportForm:
+		title = "export inventory"
 	}
-	return m.theme.title().Render(title) + "\n" + strings.Join(rows, "\n")
+	if framed {
+		meta := fmt.Sprintf("field %d/%d", form.selected+1, len(form.labels))
+		return renderShearedBox(m.theme, m.theme.Glyph("diamond")+" "+strings.ToUpper(title), meta, strings.Join(rows, "\n"), width, 0, true)
+	}
+	return m.theme.title().Render(fitText(title, innerW)) + "\n" + strings.Join(rows, "\n")
 }
 
 func validateFormField(form *wakeForm) error {
@@ -781,6 +864,30 @@ func validateFormField(form *wakeForm) error {
 		if _, err := parseFormInt(value, 0); err != nil {
 			return fmt.Errorf("port must be 0–65535; 0 inherits defaults")
 		}
+	case deviceFieldType:
+		if _, err := parseFormKind(value); err != nil {
+			return err
+		}
+	case deviceFieldPicture:
+		if _, err := parseFormPicture(value); err != nil {
+			return fmt.Errorf("picture %w", err)
+		}
 	}
 	return nil
+}
+
+// styleInput applies the active theme to a form field. The virtual cursor
+// stays on so the field renders inside the frame without moving the real
+// terminal cursor.
+func styleInput(ti *textinput.Model, theme Theme) {
+	st := textinput.DefaultStyles(true)
+	st.Focused.Prompt, st.Blurred.Prompt = lipgloss.NewStyle(), lipgloss.NewStyle()
+	st.Focused.Text, st.Blurred.Text = theme.base(), theme.base()
+	st.Focused.Placeholder, st.Blurred.Placeholder = theme.muted(), theme.muted()
+	st.Cursor.Blink = false
+	if theme.Colors {
+		st.Cursor.Color = theme.Palette.Amber
+	}
+	ti.SetStyles(st)
+	ti.SetVirtualCursor(true)
 }

@@ -7,8 +7,8 @@ import (
 
 	"github.com/aklkbqx/wol/internal/presence"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/store"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *WakeModel) beginRefresh(kind loadingKind) tea.Cmd {

@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // LayoutMode is selected from the current terminal dimensions.
@@ -34,9 +34,34 @@ func isPlainASCII(s string) bool {
 	return true
 }
 
+func asciiANSIWidth(s string) (int, bool) {
+	w := 0
+	inEsc := false
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if inEsc {
+			if b == 'm' {
+				inEsc = false
+			} else if b >= 0x80 {
+				return 0, false
+			}
+			continue
+		}
+		if b == 0x1b {
+			inEsc = true
+			continue
+		}
+		if b < 0x20 || b >= 0x7f {
+			return 0, false
+		}
+		w++
+	}
+	return w, !inEsc
+}
+
 func visibleWidth(text string) int {
-	if isPlainASCII(text) {
-		return len(text)
+	if w, ok := asciiANSIWidth(text); ok {
+		return w
 	}
 	return lipgloss.Width(text)
 }

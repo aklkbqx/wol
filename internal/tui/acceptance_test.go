@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
 	"github.com/aklkbqx/wol/internal/wol"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Uses real SQLite, routing, fleet and TUI state with synthetic network boundaries.
@@ -70,7 +70,7 @@ func TestThreeSiteInventoryBatchAcceptance(t *testing.T) {
 	if got := len(m.filteredDevices()); got != 10 {
 		t.Fatalf("search during scan matched %d", got)
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	m.handleKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	if m.selected != 1 {
 		t.Fatal("navigation blocked during scan")
 	}
@@ -232,7 +232,7 @@ func TestCancelledWakeRetryPreservesCompletedTargets(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("second operation did not start")
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	for cmd != nil {
 		_, cmd = m.Update(cmd())
 	}

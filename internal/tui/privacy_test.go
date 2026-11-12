@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/fleet"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/store"
 	wakeservice "github.com/aklkbqx/wol/internal/wake"
 	"github.com/aklkbqx/wol/internal/wol"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // These tests catch identifiers escaping through any renderer, including values
@@ -22,7 +22,7 @@ func TestPrivacyRenderedSurfaces(t *testing.T) {
 		name, word string
 		setup      func(*WakeModel)
 	}{
-		{"selected", "unreachable", func(m *WakeModel) {}},
+		{"selected", "unreachable|asleep", func(m *WakeModel) {}},
 		{"actions", "wake", func(m *WakeModel) { m.actionPicker = true }},
 		{"waking", "waking", func(m *WakeModel) {
 			m.waking = true
@@ -30,7 +30,7 @@ func TestPrivacyRenderedSurfaces(t *testing.T) {
 			m.actionTarget = "hush-device"
 			m.action = "wake"
 		}},
-		{"online", "online", func(m *WakeModel) { m.presence["one"] = "online" }},
+		{"online", "online|awake", func(m *WakeModel) { m.presence["one"] = "online" }},
 		{"failed", "failed", func(m *WakeModel) { m.status = "hush-device · wake failed: dial unlisted-error.internal 198.51.100.2" }},
 		{"cancelled", "cancelled", func(m *WakeModel) { m.status = "hush-device · action cancelled." }},
 		{"remote", "wake", func(m *WakeModel) { m.opening = true; m.actionTarget = "hush-device" }},
@@ -45,9 +45,9 @@ func TestPrivacyRenderedSurfaces(t *testing.T) {
 			m.history = []store.WakeAttempt{{TargetName: "hush-device", PacketStatus: "failed"}}
 		}},
 		{"sites", "relay", func(m *WakeModel) { m.tab = 3 }},
-		{"site-filter", "unreachable", func(m *WakeModel) { m.devices[0].SiteID = "site"; m.siteFilter = "site" }},
-		{"relay-detail", "unreachable", func(m *WakeModel) { m.devices[0].WakeRelayID = "relay" }},
-		{"presence-method", "online", func(m *WakeModel) { m.presence["one"] = "online"; m.presenceMethod["one"] = "hush-method" }},
+		{"site-filter", "unreachable|asleep", func(m *WakeModel) { m.devices[0].SiteID = "site"; m.siteFilter = "site" }},
+		{"relay-detail", "unreachable|asleep", func(m *WakeModel) { m.devices[0].WakeRelayID = "relay" }},
+		{"presence-method", "online|awake", func(m *WakeModel) { m.presence["one"] = "online"; m.presenceMethod["one"] = "hush-method" }},
 		{"batch-preview", "selected", func(m *WakeModel) { m.batchKind = "wake"; m.batchTargets = m.devices }},
 		{"batch", "failed", func(m *WakeModel) {
 			m.showBatchResults = true
@@ -72,13 +72,13 @@ func TestPrivacyRenderedSurfaces(t *testing.T) {
 					m.width, m.height = size[0], size[1]
 					m.theme = NewTheme(color, !color)
 					tc.setup(m)
-					view := strings.ToLower(stripANSI(m.View()))
+					view := strings.ToLower(stripANSI(m.render()))
 					for _, secret := range []string{"hush-", "198.51.100", "02:00:00", "unlisted-error", "/private/"} {
 						if strings.Contains(view, secret) {
 							t.Errorf("identifier %q leaked:\n%s", secret, view)
 						}
 					}
-					if !strings.Contains(view, tc.word) {
+					if !containsAny(view, strings.Split(tc.word, "|")) {
 						t.Errorf("truthful state %q missing:\n%s", tc.word, view)
 					}
 				})
@@ -103,7 +103,7 @@ func TestPrivacyDefaultDisplayAndFormState(t *testing.T) {
 	t.Setenv("WOL_TUI_REDACT", "")
 	m := privacyTestModel()
 	m.width, m.height = 120, 32
-	view := stripANSI(m.View())
+	view := stripANSI(m.render())
 	for _, want := range []string{"hush-device", "198.51.100.2", "02:00:00:00:00:5d"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("default display missing %q", want)
@@ -112,7 +112,7 @@ func TestPrivacyDefaultDisplayAndFormState(t *testing.T) {
 	t.Setenv("WOL_TUI_REDACT", "1")
 	m = privacyTestModel()
 	m.form = newWakeForm(deviceForm, "one", []string{"Name"}, []string{"hush-device"}, m.theme)
-	_ = m.View()
+	_ = m.render()
 	if m.devices[0].Name != "hush-device" || m.form.inputs[0].Value() != "hush-device" || m.form.values[0] != "hush-device" {
 		t.Fatal("presentation mutated inventory or form")
 	}
@@ -145,10 +145,19 @@ func TestPrivacyWakeUsesOriginalNetworkValues(t *testing.T) {
 	if got.MAC.String() != "02:00:00:00:00:5d" || got.Destination.String() != "198.51.100.255" || msg.result.Device.IPAddress != "198.51.100.2" {
 		t.Fatalf("network values changed: request=%+v device=%+v", got, msg.result.Device)
 	}
-	if strings.Contains(strings.ToLower(stripANSI(m.View())), "hush-") {
+	if strings.Contains(strings.ToLower(stripANSI(m.render())), "hush-") {
 		t.Fatal("action rendered real name")
 	}
 	if m.actionCancel != nil {
 		m.actionCancel()
 	}
+}
+
+func containsAny(s string, words []string) bool {
+	for _, w := range words {
+		if strings.Contains(s, w) {
+			return true
+		}
+	}
+	return false
 }

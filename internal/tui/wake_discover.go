@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/presence"
 	"github.com/aklkbqx/wol/internal/scanner"
 	"github.com/aklkbqx/wol/internal/store"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 func (m *WakeModel) beginLANDiscover() tea.Cmd {
@@ -95,7 +95,7 @@ func (m *WakeModel) handleLANKey(keyName string) tea.Cmd {
 		}
 		m.lanIface = choices[(idx+1)%len(choices)]
 		return m.beginLANDiscover()
-	case " ":
+	case " ", "space":
 		if m.lanSelected < len(m.lanUnknown) {
 			if m.lanMarked == nil {
 				m.lanMarked = map[string]bool{}
@@ -184,23 +184,35 @@ func (m *WakeModel) showNeighborForm(msg lanPrepareMsg) {
 	if m.siteFilter != "" && m.siteFilter != "unassigned" {
 		site = m.siteName(m.siteFilter)
 	}
-	values := []string{name, neighbor.MAC, neighbor.IP, netutil.LocalBroadcast(neighbor.IP, neighbor.Iface), "9", neighbor.Iface, strconv.Itoa(msg.port), "broadcast", "", site}
+	values := []string{name, neighbor.MAC, neighbor.IP, netutil.LocalBroadcast(neighbor.IP, neighbor.Iface), "9", neighbor.Iface, strconv.Itoa(msg.port), "broadcast", "", site, "", ""}
 	m.form = newWakeForm(deviceForm, "", deviceFormLabels(), values, m.theme)
 	m.status = fmt.Sprintf("Review %s · suggested %s · %d more selected. Ctrl+S saves; Esc cancels remaining.", name, msg.platform, len(m.lanQueue))
 }
 
 func (m *WakeModel) renderLANDiscover(width int) string {
+	budget := m.bodyLineBudget()
+	framed := width >= 48 && budget >= 8
 	rowWidth := max(1, width)
+	maxRows := budget
+	if framed {
+		rowWidth = max(1, width-4)
+		maxRows = max(4, budget-2)
+	}
+
 	rows := []string{
 		m.theme.muted().Render(fitText(fmt.Sprintf("lan %s · %d new · %d known · %d ip updates", m.privateField(m.lanIface), len(m.lanUnknown), len(m.lanHosts), m.lanUpdated), rowWidth)),
-		"",
 	}
 	if m.lanCount() == 0 {
 		rows = append(rows, m.theme.muted().Render(fitText("no neighbors with complete ARP entries", rowWidth)))
-		return strings.Join(rows, "\n")
+		body := strings.Join(rows, "\n")
+		if framed {
+			return renderShearedBox(m.theme, m.theme.Glyph("diamond")+" LAN DISCOVERY", "arp cache", body, width, 0, true)
+		}
+		return body
 	}
-	start := max(0, m.lanSelected-max(1, m.height-12)+1)
-	end := start + max(1, m.height-12)
+	listWindow := max(1, maxRows-2)
+	start := max(0, min(m.lanSelected-listWindow/2, max(0, m.lanCount()-listWindow)))
+	end := start + listWindow
 	index := 0
 	for _, neighbor := range m.lanUnknown {
 		if index >= start && index < end {
@@ -226,8 +238,13 @@ func (m *WakeModel) renderLANDiscover(width int) string {
 		}
 		index++
 	}
-	rows = append(rows, "", m.theme.muted().Render(fitText("space select · enter review · f interface · n scan · esc back", rowWidth)))
-	return strings.Join(rows, "\n")
+	rows = append(rows, m.theme.muted().Render(fitText("space select · enter review · f interface · n scan · esc back", rowWidth)))
+	body := strings.Join(rows, "\n")
+	if framed {
+		meta := fmt.Sprintf("%d neighbors", m.lanCount())
+		return renderShearedBox(m.theme, m.theme.Glyph("diamond")+" LAN DISCOVERY", meta, body, width, 0, true)
+	}
+	return body
 }
 
 func (m *WakeModel) lanLine(index int, name, mac, state string, width int) string {

@@ -50,6 +50,7 @@ type Device struct {
 	Interface        string `json:"interface"`
 	SiteID           string `json:"siteId"`
 	DeviceType       string `json:"deviceType"`
+	ImagePath        string `json:"imagePath,omitempty"`
 	Platform         string `json:"platform"`
 	WakeStrategy     string `json:"wakeStrategy"`
 	WakeRelayID      string `json:"wakeRelayId,omitempty"`
@@ -314,6 +315,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		{table: "devices", name: "platform", def: "TEXT NOT NULL DEFAULT 'unknown'"},
 		{table: "devices", name: "wake_strategy", def: "TEXT NOT NULL DEFAULT 'broadcast'"},
 		{table: "devices", name: "wake_relay_id", def: "TEXT NOT NULL DEFAULT ''"},
+		{table: "devices", name: "image_path", def: "TEXT NOT NULL DEFAULT ''"},
 		{table: "wake_relays", name: "transport", def: "TEXT NOT NULL DEFAULT 'ssh_etherwake'"},
 		{table: "wake_relays", name: "interface_name", def: "TEXT NOT NULL DEFAULT 'br-lan'"},
 		{table: "wake_relays", name: "ssh_user", def: "TEXT NOT NULL DEFAULT ''"},
@@ -569,7 +571,7 @@ func (s *Store) DeleteSite(ctx context.Context, id string) error {
 }
 
 func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices ORDER BY name`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, image_path, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -586,14 +588,14 @@ func (s *Store) ListDevices(ctx context.Context) ([]Device, error) {
 }
 
 func (s *Store) GetDevice(ctx context.Context, id string) (Device, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, image_path, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, id)
 	return scanDevice(row)
 }
 
 func scanDevice(scanner interface{ Scan(...any) error }) (Device, error) {
 	var item Device
 	var enabled int
-	err := scanner.Scan(&item.ID, &item.Name, &item.MACAddress, &item.IPAddress, &item.BroadcastAddress, &item.Port, &item.Interface, &item.SiteID, &item.DeviceType, &item.Platform, &item.WakeStrategy, &item.WakeRelayID, &item.VerifyPort, &item.Description, &enabled, &item.CreatedAt, &item.UpdatedAt)
+	err := scanner.Scan(&item.ID, &item.Name, &item.MACAddress, &item.IPAddress, &item.BroadcastAddress, &item.Port, &item.Interface, &item.SiteID, &item.DeviceType, &item.ImagePath, &item.Platform, &item.WakeStrategy, &item.WakeRelayID, &item.VerifyPort, &item.Description, &enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrNotFound
 	}
@@ -618,7 +620,7 @@ func (s *Store) CreateDevice(ctx context.Context, item Device) (Device, error) {
 	if item.WakeStrategy == "" {
 		item.WakeStrategy = "broadcast"
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, image_path, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, strings.TrimSpace(item.ImagePath), item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
 	if err != nil {
 		return Device{}, normalizeDBError(err)
 	}
@@ -633,7 +635,7 @@ func (s *Store) UpdateDevice(ctx context.Context, id string, item Device) (Devic
 	if item.WakeStrategy == "" {
 		item.WakeStrategy = "broadcast"
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.UpdatedAt, id)
+	result, err := s.db.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, image_path = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, strings.TrimSpace(item.ImagePath), item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.UpdatedAt, id)
 	if err != nil {
 		return Device{}, normalizeDBError(err)
 	}
@@ -1094,7 +1096,7 @@ func (s *Store) upsertDeviceOn(ctx context.Context, q queryable, item Device) (D
 		if item.WakeStrategy == "" {
 			item.WakeStrategy = "broadcast"
 		}
-		_, err = q.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
+		_, err = q.ExecContext(ctx, `INSERT INTO devices (id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, image_path, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, item.ID, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, strings.TrimSpace(item.ImagePath), item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.CreatedAt, item.UpdatedAt)
 		if err != nil {
 			return Device{}, normalizeDBError(err)
 		}
@@ -1110,14 +1112,14 @@ func (s *Store) upsertDeviceOn(ctx context.Context, q queryable, item Device) (D
 	if item.WakeStrategy == "" {
 		item.WakeStrategy = "broadcast"
 	}
-	result, err := q.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = ?, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.UpdatedAt, existingID)
+	result, err := q.ExecContext(ctx, `UPDATE devices SET name = ?, mac_address = ?, ip_address = ?, broadcast_address = ?, port = ?, interface_name = ?, site_id = ?, device_type = CASE WHEN ? IN ('', 'unknown') THEN device_type ELSE ? END, image_path = CASE WHEN ? = '' THEN image_path ELSE ? END, platform = ?, wake_strategy = ?, wake_relay_id = ?, verify_port = ?, description = ?, enabled = ?, updated_at = ? WHERE id = ?`, strings.TrimSpace(item.Name), strings.ToLower(item.MACAddress), item.IPAddress, item.BroadcastAddress, item.Port, item.Interface, item.SiteID, item.DeviceType, item.DeviceType, strings.TrimSpace(item.ImagePath), strings.TrimSpace(item.ImagePath), item.Platform, item.WakeStrategy, item.WakeRelayID, item.VerifyPort, item.Description, boolInt(item.Enabled), item.UpdatedAt, existingID)
 	if err != nil {
 		return Device{}, normalizeDBError(err)
 	}
 	if count, _ := result.RowsAffected(); count == 0 {
 		return Device{}, ErrNotFound
 	}
-	return scanDevice(q.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, existingID))
+	return scanDevice(q.QueryRowContext(ctx, `SELECT id, name, mac_address, ip_address, broadcast_address, port, interface_name, site_id, device_type, image_path, platform, wake_strategy, wake_relay_id, verify_port, description, enabled, created_at, updated_at FROM devices WHERE id = ?`, existingID))
 }
 
 func (s *Store) upsertGroupOn(ctx context.Context, q queryable, item Group) error {

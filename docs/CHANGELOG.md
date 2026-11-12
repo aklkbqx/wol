@@ -1,3 +1,17 @@
+# 0.4.20 (unreleased)
+
+- Move the terminal UI to Bubble Tea, Lip Gloss and Bubbles v2 and open the
+  Machines tab in Spotlight at 90×24 or larger: a machine list beside one
+  large stage with the name in block letters, the facts, one main action and
+  a live countdown while a wake waits for an answer (#21).
+- Draw machine pictures in the stage: a night room with the machine lit,
+  asleep or waking, a small icon per machine type in the list and the power
+  logo. Kitty and Ghostty use the kitty graphics protocol; other truecolor
+  terminals use half blocks. `WOL_TUI_IMAGES=auto|kitty|blocks|off` (#21).
+- Add Type and Picture file to the machine form. A picture is a PNG, JPEG or
+  GIF of up to 20 MB and 40 megapixels, checked on save and loaded off the
+  UI thread. Import and scan keep a type and picture set by hand (#21).
+
 # 0.4.19 — 2026-11-08
 
 - Bound `wake_attempts` and `power_attempts` history to 500 rows with

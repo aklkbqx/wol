@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/aklkbqx/wol/internal/power"
 	"github.com/aklkbqx/wol/internal/store"
 	"github.com/aklkbqx/wol/internal/ui"
@@ -122,17 +123,17 @@ func runShutdown(arguments []string) int {
 	})
 
 	if execErr != nil {
-		fmt.Fprintf(os.Stderr, "%s\n", ui.StyleDanger.Render(fmt.Sprintf("✖ Power command failed for %s: %v", device.Name, execErr)))
+		lipgloss.Fprintf(os.Stderr, "%s\n", ui.StyleDanger.Render(fmt.Sprintf("✖ Power command failed for %s: %v", device.Name, execErr)))
 		return 3
 	}
 
 	switch result.Action {
 	case power.ActionCancel:
-		fmt.Println(ui.StyleSuccess.Render(fmt.Sprintf("✔ Cancelled pending shutdown for %s (%s)", device.Name, target.Host)))
+		lipgloss.Fprintln(os.Stdout, ui.StyleSuccess.Render(fmt.Sprintf("✔ Cancelled pending shutdown for %s (%s)", device.Name, target.Host)))
 	case power.ActionSchedule:
-		fmt.Println(ui.StyleSuccess.Render(fmt.Sprintf("✔ Scheduled shutdown for %s (%s) in %s (at %s)", device.Name, target.Host, delay, result.ScheduledTime.Format("15:04:05"))))
+		lipgloss.Fprintln(os.Stdout, ui.StyleSuccess.Render(fmt.Sprintf("✔ Scheduled shutdown for %s (%s) in %s (at %s)", device.Name, target.Host, delay, result.ScheduledTime.Format("15:04:05"))))
 	default:
-		fmt.Println(ui.StyleSuccess.Render(fmt.Sprintf("✔ Sent immediate shutdown command to %s (%s)", device.Name, target.Host)))
+		lipgloss.Fprintln(os.Stdout, ui.StyleSuccess.Render(fmt.Sprintf("✔ Sent immediate shutdown command to %s (%s)", device.Name, target.Host)))
 	}
 
 	return 0
@@ -248,7 +249,7 @@ func runShutdownStatus(arguments []string) int {
 		return 0
 	}
 
-	fmt.Println(ui.RenderHeader("RECENT POWER OPERATIONS", "Historical shutdown, schedule, and cancel events"))
+	lipgloss.Fprintln(os.Stdout, ui.RenderHeader("RECENT POWER OPERATIONS", "Historical shutdown, schedule, and cancel events"))
 	var rows [][]string
 	for _, a := range attempts {
 		statusBadge := ui.Badge("success", strings.ToUpper(a.Status))
@@ -271,7 +272,7 @@ func runShutdownStatus(arguments []string) int {
 			fmt.Sprintf("%s  %s", statusBadge, ui.StyleMuted.Render(detail)),
 		})
 	}
-	fmt.Println(ui.RenderBox("POWER HISTORY", rows))
+	lipgloss.Fprintln(os.Stdout, ui.RenderBox("POWER HISTORY", rows))
 	return 0
 }
 

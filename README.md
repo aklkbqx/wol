@@ -14,27 +14,31 @@ list is a local SQLite file. There is no account, server or background service.
 with a real Wake Desk recording, in English and Thai.
 
 ```text
-⚡ wol command center  v0.4.19  checked 21:51:54
-◆ machines   │     routes   │     activity   │     sites
+   ● wol  all sites                 Machines   Routes   Activity   Sites           not checked yet
 
-╭─ ◆ FLEET ────────────────────────────────────────────────────╮ ╭─ ◆ INSPECTOR ─────────────────────────────────────╮
-│ 1 machines  0 online  1 unreachable  0 unknown               │ │ INSPECTOR                                         │
-│                                                              │ │ Sample desktop                                    │
-│ › Sample desktop        unreachable  setup                   │ │ unreachable  setup                                │
-│                                                              │ │ direct broadcast 198.51.100.255:9                 │
-│                                                              │ │ enter  wake or stream                             │
-│                                                              │ │ ────────────────────────                          │
-│                                                              │ │ IP   : 198.51.100.2                               │
-│                                                              │ │ Seen : unreachable                                │
-│                                                              │ │ MAC  : 02:00:00:00:00:01                          │
-│                                                              │ │ Route: broadcast 198.51.100.255:9                 │
-╰──────────────────────────────────────────────────────────────╯ ╰───────────────────────────────────────────────────╯
-Checked 1/1 machines. Unreachable does not prove power is off.
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-enter choose   space select   / search   ? help   q quit
+
+   MACHINES                  2
+                                   ▄████▄   █▀▄ ▄▀▄ ▄▀▀
+   ● studio                        ██████   █ █ █▀█  ▀▄
+                                   ▀████▀   ▀ ▀ ▀ ▀ ▀▀
+   ○ nas
+                                   asleep   no answer on the last check
+
+
+                                   address                        hardware
+                                   198.51.100.20                  02:00:00:00:00:02
+                                   wakes by                       checks
+                                   broadcast 198.51.100.255:9     tcp:445
+
+
+                                     w   Wake nas      c  wake and connect    s  check
+
+
+   1 awake  1 asleep                ↑↓  move    space  mark    /  filter    ?  all keys    q  quit
 ```
 
-<sub>Wake Desk v0.4.19 with a sample machine and documentation addresses.</sub>
+<sub>Wake Desk Spotlight without color, with sample machines and documentation addresses. In a
+truecolor terminal the stage shows a picture of the machine instead of the lamp.</sub>
 
 ## What it does
 
@@ -140,22 +144,49 @@ Run any command with `-h` for its full flag list.
 | `Space`, `S` / `W` | Select machines, then review a batch check / wake |
 | `R` | Retry the failed targets of a batch |
 | `i` / `E` | Import / export the inventory |
+| `t` | Cycle the color theme (`Night Room`, `Brass Night`, `Catppuccin Mocha`, `Tokyo Night`, `Gruvbox Dark`, `Daylight Paper`) |
 | `/`, `?`, `q` | Filter, help, quit |
 
 `Esc` cancels a running check or batch. The layout adapts to narrow, compact
-and wide terminals.
+and wide terminals. At 90×24 or larger the Machines tab opens in Spotlight: a
+machine list on the left and one large stage for the focused machine, with a
+live countdown while a wake waits for the machine to answer.
 
 Display options:
 
 | Variable | Effect |
 | --- | --- |
+| `WOL_TUI_THEME=<id>` | Set startup palette (`night` default, `brass`, `catppuccin`, `tokyonight`, `gruvbox`, `daylight`) |
 | `WOL_TUI_REDACT=1` | Hide machine names, IP and MAC addresses on screen |
 | `WOL_TUI_REDUCED_MOTION=1` or `WOL_TUI_MOTION=off` | Turn off animation |
 | `WOL_TUI_ASCII=1` | Use ASCII glyphs |
+| `WOL_TUI_IMAGES=<mode>` | Pictures: `auto` (default), `kitty`, `blocks` or `off` |
 | `NO_COLOR=1` | Turn off color |
 
 `WOL_TUI_REDACT` only changes what is shown. Wakes, exports and logs still use
 the real values.
+
+## Pictures
+
+In a truecolor terminal the stage shows a picture of the machine in a night
+room: the screen is lit and the power light is green when it answers, dark
+when it sleeps, and pulses amber while a wake is on its way. A window too
+small for the picture shows a status lamp instead.
+
+- **Type** (in the add/edit form, `Ctrl+N` cycles): desktop, laptop, server,
+  NAS, mini PC or console. Leave it blank to guess from the name
+  (`nas-vault` is drawn as a NAS, `render-node` as a server).
+- **Picture file**: a PNG, JPEG or GIF of your own machine, up to 20 MB and
+  40 megapixels. `~/` works. It is dimmed while the machine sleeps. When the
+  file moves or cannot be read, the stage says so and falls back to the room.
+
+Kitty and Ghostty draw sharp pictures with the kitty graphics protocol, and
+add a small icon of each machine type to the list. Other truecolor terminals
+(iTerm2, WezTerm, Windows Terminal, VS Code, and tmux in a truecolor
+terminal) get half-block pictures. Terminals without truecolor, `NO_COLOR`
+and `WOL_TUI_ASCII` get none. `WOL_TUI_REDACT=1` never shows your picture
+and never guesses a type from the name. A terminal cannot change its window
+icon, so the power logo sits at the top of the machine list instead.
 
 ## Remote sessions
 
