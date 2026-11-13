@@ -313,7 +313,11 @@ func (m *WakeModel) spotPane(devices []store.Device, height int, st spotStyles) 
 		lines[first+i*2] = row.String(p.fill)
 	}
 	if len(devices) == 0 {
-		lines[first] = newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.muted, "nothing matches").String(p.fill)
+		empty := "nothing matches"
+		if len(m.devices) == 0 {
+			empty = "no machines yet"
+		}
+		lines[first] = newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.muted, empty).String(p.fill)
 	} else if start+slots < len(devices) {
 		more := fmt.Sprintf("+%d more", len(devices)-start-slots)
 		lines[last+1] = newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.muted, more).String(p.fill)

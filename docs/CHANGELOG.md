@@ -15,6 +15,10 @@
   list stays on the left, the focused field is lit with a cursor, labels are
   no longer cut off, each field explains what it takes, and the key hints
   follow the field (`ctrl+n` only where it cycles choices) (#21).
+- Draw the key list, the action picker, the delete confirmation, batch preview
+  and results, the first run with no machines and the wake-and-connect launch
+  in Spotlight as well. Delete names the machine and says what it removes;
+  batch results count sent, failed and cancelled machines (#21).
 
 # 0.4.19 — 2026-11-08
 

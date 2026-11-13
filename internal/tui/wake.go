@@ -1005,6 +1005,9 @@ func (m *WakeModel) render() string {
 	if m.phase != phaseReady {
 		return m.renderLoadingView(inner, mode)
 	}
+	if kind := m.spotPanelKind(width, m.height); kind != "" {
+		return m.renderSpotPanel(kind, width, m.height)
+	}
 	if m.opening {
 		return m.renderRemoteLoadingView(inner, mode)
 	}

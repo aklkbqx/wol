@@ -211,28 +211,13 @@ func (m *WakeModel) spotFormStage(width, height int, st spotStyles) []string {
 		lines[height-5] = newSpotRow(width).add(s.soft, h.label).add(s.fill, "   ").add(s.muted, fitText(h.hint, width-visibleWidth(h.label)-3)).String(s.fill)
 	}
 
-	keys := newSpotRow(width)
 	// Most needed first: narrow stages drop hints from the end.
-	hints := [][2]string{{"ctrl+s", "save"}}
+	hints := []spotHint{{key: "ctrl+s", label: "save"}}
 	if form.selected < n && fields[form.selected].cycle {
-		hints = append(hints, [2]string{"ctrl+n", "cycle"})
+		hints = append(hints, spotHint{key: "ctrl+n", label: "cycle"})
 	}
-	hints = append(hints, [2]string{"tab", "next"})
-	esc := spotKeyWidth("esc", "cancel")
-	for i, h := range hints {
-		gap := 0
-		if i > 0 {
-			gap = 3
-		}
-		if keys.used+gap+spotKeyWidth(h[0], h[1])+3+esc > width {
-			break
-		}
-		keys.add(s.fill, spaces(gap))
-		m.spotKey(keys, st, h[0], h[1])
-	}
-	keys.to(s.fill, width-esc)
-	m.spotKey(keys, st, "esc", "cancel")
-	lines[height-3] = keys.String(s.fill)
+	hints = append(hints, spotHint{key: "tab", label: "next"})
+	lines[height-3] = m.spotKeyRow(width, st, hints, spotHint{key: "esc", label: "cancel"})
 	return lines
 }
 
