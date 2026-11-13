@@ -1011,6 +1011,9 @@ func (m *WakeModel) render() string {
 	if m.spotlightEligible(width, m.height) {
 		return m.renderSpotlight(width, m.height)
 	}
+	if m.spotFormEligible(width, m.height) {
+		return m.renderSpotForm(width, m.height)
+	}
 
 	var builder strings.Builder
 	var headerParts []string

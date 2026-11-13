@@ -11,6 +11,10 @@
 - Add Type and Picture file to the machine form. A picture is a PNG, JPEG or
   GIF of up to 20 MB and 40 megapixels, checked on save and loaded off the
   UI thread. Import and scan keep a type and picture set by hand (#21).
+- Open the machine, remote and shut-down forms in Spotlight too: the machine
+  list stays on the left, the focused field is lit with a cursor, labels are
+  no longer cut off, each field explains what it takes, and the key hints
+  follow the field (`ctrl+n` only where it cycles choices) (#21).
 
 # 0.4.19 — 2026-11-08
 

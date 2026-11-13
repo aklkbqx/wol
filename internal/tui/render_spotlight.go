@@ -171,7 +171,11 @@ func (m *WakeModel) renderSpotlight(width, height int) string {
 	stageWidth := width - spotPaneWidth - spotGutter - spotRightPad
 	pane := m.spotPane(devices, height, st)
 	stage := m.spotStage(devices, stageWidth, height, st)
+	return spotCompose(pane, stage, width, height, st)
+}
 
+// spotCompose joins the pane and the stage into the full frame.
+func spotCompose(pane, stage []string, width, height int, st spotStyles) string {
 	var out strings.Builder
 	out.Grow(width * height * 4)
 	gutter := st.stage.fill.pre + spaces(spotGutter) + st.stage.fill.post
@@ -186,6 +190,31 @@ func (m *WakeModel) renderSpotlight(width, height int) string {
 		out.WriteString(right)
 	}
 	return out.String()
+}
+
+// spotTabs is the stage header: the tab names and, on the right, a note
+// such as the check freshness.
+func (m *WakeModel) spotTabs(width int, note string, alert bool, st spotStyles) string {
+	s := st.stage
+	tabs := newSpotRow(width)
+	for i, name := range []string{"Machines", "Routes", "Activity", "Sites"} {
+		if i > 0 {
+			tabs.add(s.fill, " ")
+		}
+		if i == m.tab {
+			tabs.add(st.focus.bold, " "+name+" ")
+		} else {
+			tabs.add(s.muted, " "+name+" ")
+		}
+	}
+	noteStyle := s.muted
+	if alert {
+		noteStyle = s.rose
+	}
+	if note != "" && tabs.used+3+visibleWidth(note) <= width {
+		tabs.to(s.fill, width-visibleWidth(note)).add(noteStyle, note)
+	}
+	return tabs.String(s.fill)
 }
 
 func spotStateWord(state string) string {
@@ -347,26 +376,7 @@ func (m *WakeModel) spotStage(devices []store.Device, width, height int, st spot
 	}
 	now := time.Now()
 
-	tabs := newSpotRow(width)
-	for i, name := range []string{"Machines", "Routes", "Activity", "Sites"} {
-		if i > 0 {
-			tabs.add(s.fill, " ")
-		}
-		if i == m.tab {
-			tabs.add(st.focus.bold, " "+name+" ")
-		} else {
-			tabs.add(s.muted, " "+name+" ")
-		}
-	}
-	fresh := m.spotFreshness(now)
-	freshStyle := s.muted
-	if m.stale {
-		freshStyle = s.rose
-	}
-	if tabs.used+3+visibleWidth(fresh) <= width {
-		tabs.to(s.fill, width-visibleWidth(fresh)).add(freshStyle, fresh)
-	}
-	lines[1] = tabs.String(s.fill)
+	lines[1] = m.spotTabs(width, m.spotFreshness(now), m.stale, st)
 
 	if len(devices) == 0 {
 		lines[6] = newSpotRow(width).add(s.text, "No machine matches this filter.").String(s.fill)

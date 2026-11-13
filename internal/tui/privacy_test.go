@@ -58,7 +58,7 @@ func TestPrivacyRenderedSurfaces(t *testing.T) {
 			m.lanIface = "hush-interface"
 			m.lanUnknown = []presence.Neighbor{{IP: "198.51.100.2", MAC: "02:00:00:00:00:5d"}}
 		}},
-		{"form", "saves", func(m *WakeModel) {
+		{"form", "save", func(m *WakeModel) {
 			m.form = newWakeForm(deviceForm, "one", []string{"Name", "IP"}, []string{"hush-device", "198.51.100.2"}, m.theme)
 			m.form.error = "unlisted-error.internal invalid"
 		}},
