@@ -1,4 +1,4 @@
-# 0.4.20 (unreleased)
+# 0.4.20 — 2026-11-14
 
 - Move the terminal UI to Bubble Tea, Lip Gloss and Bubbles v2 and open the
   Machines tab in Spotlight: a machine list beside one
