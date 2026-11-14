@@ -11,18 +11,89 @@ import (
 	"github.com/aklkbqx/wol/internal/termimg"
 )
 
-// Spotlight is the wide Machines layout: a quiet machine list on the left
-// and one large stage for the focused machine on the right. It is drawn on a
-// fixed cell grid so every row is exactly the terminal width.
+// Spotlight is the Machines layout: a quiet machine list on the left and
+// one large stage for the focused machine on the right. It is drawn on a
+// fixed cell grid so every row is exactly the terminal width. Smaller
+// windows keep the same parts: a narrower list, then the stage alone, then
+// the list alone (see spotFrame).
 const (
-	spotMinWidth  = 90
-	spotMinHeight = 24
-	spotPaneWidth = 32 // left pane, including its 3-column inner margin
-	spotGutter    = 3  // blank columns between pane and stage
-	spotMargin    = 3  // left margin inside the pane
-	spotRightPad  = 2  // blank columns right of the stage
-	spotMeasure   = 72 // widest the stage content grows
+	spotMinWidth    = 90 // full list pane
+	spotMinHeight   = 24 // full stage rows and room for a picture
+	spotNarrowWidth = 72 // narrow list pane
+	spotSingleWidth = 50 // stage alone
+	spotStageHeight = 20 // fewest rows that hold a stage
+	spotListWidth   = 30 // list alone, below this the classic layout
+	spotListHeight  = 10
+	spotPaneWidth   = 32 // left pane, including its 3-column inner margin
+	spotGutter      = 3  // blank columns between pane and stage
+	spotMargin      = 3  // left margin inside the pane
+	spotRightPad    = 2  // blank columns right of the stage
+	spotMeasure     = 72 // widest the stage content grows
+	spotStackWidth  = 60 // narrower stages list the facts in one column
+	spotTallWidth   = 36 // portrait phone: picture above the facts
+	spotTallHeight  = 30
+	spotSideWidth   = 44 // list column beside the machine on a wide, short window
 )
+
+// Spotlight frame modes, widest first.
+const (
+	spotNone   = iota // classic layout
+	spotFull          // 32-column pane and the stage
+	spotNarrow        // 24-column pane and the stage
+	spotSingle        // the stage alone, neighbours named below it
+	spotList          // the list alone
+)
+
+// spotFrame is how a Spotlight frame splits its width.
+type spotFrame struct {
+	mode                 int
+	pane, margin         int // pane width and the margin inside it, 0 without a pane
+	gutter, right, stage int // columns left of, right of and inside the stage
+	width, height        int
+	tall                 bool // portrait: picture above the facts, tall buttons
+}
+
+// hasStage reports whether the frame draws the stage, so panels and forms
+// can use it.
+func (f spotFrame) hasStage() bool {
+	return f.mode == spotFull || f.mode == spotNarrow || f.mode == spotSingle
+}
+
+// spotFrame picks the Spotlight mode for the window. Only the Machines tab
+// uses it, and ASCII keeps the classic layout.
+func (m *WakeModel) spotFrame(width, height int) spotFrame {
+	f := spotFrame{width: width, height: height}
+	if m.tab != 0 || m.theme.ASCII || width < spotListWidth || height < spotListHeight {
+		return f
+	}
+	// A portrait window (a phone held upright) stacks the stage instead of
+	// leaving rows empty below it. Cells are about twice as tall as wide, so
+	// height*2 >= width means the window is at least square on screen.
+	if !m.listView && width >= spotTallWidth && width < spotNarrowWidth && height >= spotTallHeight && height*2 >= width {
+		f.mode, f.tall, f.gutter, f.right = spotSingle, true, 3, 3
+		if width < spotSingleWidth {
+			f.gutter, f.right = 2, 2
+		}
+		f.stage = width - f.gutter - f.right
+		return f
+	}
+	switch {
+	case width < spotSingleWidth || height < spotStageHeight:
+		f.mode = spotList
+	case width >= spotMinWidth:
+		f.mode, f.pane, f.margin, f.gutter, f.right = spotFull, spotPaneWidth, spotMargin, spotGutter, spotRightPad
+	case width >= spotNarrowWidth:
+		f.mode, f.pane, f.margin, f.gutter, f.right = spotNarrow, 24, 2, 2, 2
+	case m.listView:
+		f.mode = spotList
+	default:
+		f.mode, f.gutter, f.right = spotSingle, 3, 3
+	}
+	if f.mode != spotList {
+		f.stage = width - f.pane - f.gutter - f.right
+	}
+	return f
+}
 
 // wakeAnswerWindow is how long a woken machine has to answer its check.
 const wakeAnswerWindow = 90 * time.Second
@@ -158,8 +229,8 @@ func (r *spotRow) String(fill paint) string {
 }
 
 func (m *WakeModel) spotlightEligible(width, height int) bool {
-	return m.tab == 0 && width >= spotMinWidth && height >= spotMinHeight &&
-		!m.theme.ASCII && len(m.devices) > 0 &&
+	f := m.spotFrame(width, height)
+	return f.mode != spotNone && (len(m.devices) > 0 || f.mode == spotList) &&
 		m.form == nil && !m.showBatchResults && (m.batchKind == "" || m.batchRunning) &&
 		!m.lanOpen && !m.actionPicker && !m.showHelp && m.confirm == ""
 }
@@ -168,23 +239,34 @@ func (m *WakeModel) spotlightEligible(width, height int) bool {
 func (m *WakeModel) renderSpotlight(width, height int) string {
 	st := m.theme.spot()
 	devices := m.filteredDevices()
-	stageWidth := width - spotPaneWidth - spotGutter - spotRightPad
-	pane := m.spotPane(devices, height, st)
-	stage := m.spotStage(devices, stageWidth, height, st)
-	return spotCompose(pane, stage, width, height, st)
+	f := m.spotFrame(width, height)
+	if f.mode == spotList {
+		return m.renderSpotList(devices, f, st)
+	}
+	if f.tall {
+		return spotCompose(nil, m.spotTallStage(devices, f, st), f, st)
+	}
+	stage := m.spotStage(devices, f.stage, height, st)
+	if f.mode == spotSingle {
+		m.spotSingleChrome(stage, devices, f, st)
+	}
+	return spotCompose(m.spotPane(devices, f, st), stage, f, st)
 }
 
-// spotCompose joins the pane and the stage into the full frame.
-func spotCompose(pane, stage []string, width, height int, st spotStyles) string {
+// spotCompose joins the pane and the stage into the full frame. A frame
+// without a pane passes nil.
+func spotCompose(pane, stage []string, f spotFrame, st spotStyles) string {
 	var out strings.Builder
-	out.Grow(width * height * 4)
-	gutter := st.stage.fill.pre + spaces(spotGutter) + st.stage.fill.post
-	right := st.stage.fill.pre + spaces(spotRightPad) + st.stage.fill.post
-	for i := 0; i < height; i++ {
+	out.Grow(f.width * f.height * 4)
+	gutter := st.stage.fill.pre + spaces(f.gutter) + st.stage.fill.post
+	right := st.stage.fill.pre + spaces(f.right) + st.stage.fill.post
+	for i := 0; i < f.height; i++ {
 		if i > 0 {
 			out.WriteByte('\n')
 		}
-		out.WriteString(pane[i])
+		if pane != nil {
+			out.WriteString(pane[i])
+		}
 		out.WriteString(gutter)
 		out.WriteString(stage[i])
 		out.WriteString(right)
@@ -197,9 +279,13 @@ func spotCompose(pane, stage []string, width, height int, st spotStyles) string 
 func (m *WakeModel) spotTabs(width int, note string, alert bool, st spotStyles) string {
 	s := st.stage
 	tabs := newSpotRow(width)
+	gap := " "
+	if width < 38 {
+		gap = "" // a small phone: all four tabs still fit
+	}
 	for i, name := range []string{"Machines", "Routes", "Activity", "Sites"} {
 		if i > 0 {
-			tabs.add(s.fill, " ")
+			tabs.add(s.fill, gap)
 		}
 		if i == m.tab {
 			tabs.add(st.focus.bold, " "+name+" ")
@@ -249,32 +335,36 @@ func (m *WakeModel) spotGlyph(device store.Device, tone spotTone) (string, paint
 	}
 }
 
-func (m *WakeModel) spotPane(devices []store.Device, height int, st spotStyles) []string {
+func (m *WakeModel) spotPane(devices []store.Device, f spotFrame, st spotStyles) []string {
+	if f.pane == 0 {
+		return nil
+	}
+	height, paneWidth, margin := f.height, f.pane, f.margin
 	lines := make([]string, height)
 	p := st.pane
-	blank := p.fill.pre + spaces(spotPaneWidth) + p.fill.post
+	blank := p.fill.pre + spaces(paneWidth) + p.fill.post
 	for i := range lines {
 		lines[i] = blank
 	}
-	inner := spotPaneWidth - spotMargin - 2
+	inner := paneWidth - margin - 2
 
 	site := "all sites"
 	if m.siteFilter != "" {
 		site = m.privateField(m.siteName(m.siteFilter))
 	}
-	head := newSpotRow(spotPaneWidth).to(p.fill, spotMargin)
+	head := newSpotRow(paneWidth).to(p.fill, margin)
 	if logo := m.paneLogo(); logo != "" {
 		head.raw(logo, 2)
 	} else {
 		head.add(p.amber, "●")
 	}
 	head.add(p.fill, " ").add(p.bold, "wol").add(p.fill, "  ")
-	head.add(p.soft, fitText(site, spotPaneWidth-head.used-2))
+	head.add(p.soft, fitText(site, paneWidth-head.used-2))
 	lines[1] = head.String(p.fill)
 
 	count := fmt.Sprintf("%d", len(devices))
-	label := newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.muted, "MACHINES")
-	label.to(p.fill, spotPaneWidth-2-len(count)).add(p.muted, count)
+	label := newSpotRow(paneWidth).to(p.fill, margin).add(p.muted, "MACHINES")
+	label.to(p.fill, paneWidth-2-len(count)).add(p.muted, count)
 	lines[4] = label.String(p.fill)
 
 	// Two rows per machine. Rows 6..height-5 hold the list.
@@ -297,7 +387,7 @@ func (m *WakeModel) spotPane(devices []store.Device, height int, st spotStyles) 
 		if focused {
 			nameStyle = tone.bold
 		}
-		row := newSpotRow(spotPaneWidth).to(p.fill, spotMargin-1)
+		row := newSpotRow(paneWidth).to(p.fill, margin-1)
 		row.add(tone.fill, " ")
 		if icon := m.paneIcon(device, focused); icon != "" {
 			row.raw(icon, 2)
@@ -305,11 +395,11 @@ func (m *WakeModel) spotPane(devices []store.Device, height int, st spotStyles) 
 			row.add(gStyle, glyph)
 		}
 		row.add(tone.fill, " ")
-		row.add(nameStyle, fitText(m.privateField(device.Name), spotPaneWidth-row.used-4))
+		row.add(nameStyle, fitText(m.privateField(device.Name), paneWidth-row.used-4))
 		if m.marked[device.ID] {
-			row.to(tone.fill, spotPaneWidth-4).add(tone.amber, "✓")
+			row.to(tone.fill, paneWidth-4).add(tone.amber, "✓")
 		}
-		row.to(tone.fill, spotPaneWidth-2)
+		row.to(tone.fill, paneWidth-2)
 		lines[first+i*2] = row.String(p.fill)
 	}
 	if len(devices) == 0 {
@@ -317,24 +407,26 @@ func (m *WakeModel) spotPane(devices []store.Device, height int, st spotStyles) 
 		if len(m.devices) == 0 {
 			empty = "no machines yet"
 		}
-		lines[first] = newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.muted, empty).String(p.fill)
+		lines[first] = newSpotRow(paneWidth).to(p.fill, margin).add(p.muted, empty).String(p.fill)
 	} else if start+slots < len(devices) {
 		more := fmt.Sprintf("+%d more", len(devices)-start-slots)
-		lines[last+1] = newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.muted, more).String(p.fill)
+		lines[last+1] = newSpotRow(paneWidth).to(p.fill, margin).add(p.muted, more).String(p.fill)
 	}
 
 	if m.filtering {
-		row := newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.amber, "/ ").add(p.text, fitText(m.privateField(m.filterInput), inner-3)).add(p.amber, "_")
+		row := newSpotRow(paneWidth).to(p.fill, margin).add(p.amber, "/ ").add(p.text, fitText(m.privateField(m.filterInput), inner-3)).add(p.amber, "_")
 		lines[height-4] = row.String(p.fill)
 	} else if chips := m.spotFilterChips(); chips != "" {
-		lines[height-4] = newSpotRow(spotPaneWidth).to(p.fill, spotMargin).add(p.amber, fitText(chips, inner)).String(p.fill)
+		lines[height-4] = newSpotRow(paneWidth).to(p.fill, margin).add(p.amber, fitText(chips, inner)).String(p.fill)
 	}
 
 	online, offline, _ := m.machineSummary(devices)
-	sum := newSpotRow(spotPaneWidth).to(p.fill, spotMargin)
+	sum := newSpotRow(paneWidth).to(p.fill, margin)
 	sum.add(p.soft, fmt.Sprintf("%d", online)).add(p.muted, " awake  ").add(p.soft, fmt.Sprintf("%d", offline)).add(p.muted, " asleep")
 	if n := len(m.marked); n > 0 {
-		sum.add(p.muted, "  ").add(p.amber, fmt.Sprintf("%d marked", n))
+		if marked := fmt.Sprintf("%d marked", n); sum.used+2+len(marked) <= paneWidth-2 {
+			sum.add(p.muted, "  ").add(p.amber, marked)
+		}
 	}
 	lines[height-3] = sum.String(p.fill)
 	return lines
@@ -378,7 +470,7 @@ func (m *WakeModel) spotStage(devices []store.Device, width, height int, st spot
 	for i := range lines {
 		lines[i] = blank
 	}
-	now := time.Now()
+	now := m.now()
 
 	lines[1] = m.spotTabs(width, m.spotFreshness(now), m.stale, st)
 
@@ -461,7 +553,7 @@ func (m *WakeModel) spotStage(devices []store.Device, width, height int, st spot
 		} else if i == 1 {
 			row.add(s.bold, fitText(name, width-9))
 		}
-		lines[5+i] = row.String(s.fill)
+		lines[lay.nameRow+i] = row.String(s.fill)
 	}
 
 	if waking {
@@ -509,7 +601,16 @@ func (m *WakeModel) spotDetails(lines []string, device store.Device, state, name
 		{{"address", m.privateField(addr)}, {"hardware", m.privateField(device.MACAddress)}},
 		{{"wakes by", m.privateMessage(m.routeText(device))}, {"checks", checks}},
 	}
+	if width < spotStackWidth {
+		for i, fact := range [][2]string{facts[0][0], facts[0][1], facts[1][0], facts[1][1]} {
+			row := newSpotRow(width).add(s.muted, fact[0]).to(s.fill, 10).add(s.text, fitText(fact[1], width-10))
+			lines[lay.factsRow+i] = row.String(s.fill)
+		}
+	}
 	for i, pair := range facts {
+		if width < spotStackWidth {
+			break
+		}
 		lab := newSpotRow(width).add(s.muted, pair[0][0]).to(s.fill, half).add(s.muted, pair[1][0])
 		val := newSpotRow(width).add(s.text, fitText(pair[0][1], half-2)).to(s.fill, half).add(s.text, fitText(pair[1][1], min(width, spotMeasure)-half))
 		lines[lay.factsRow+i*2] = lab.String(s.fill)
@@ -621,13 +722,20 @@ func (m *WakeModel) spotWaking(lines []string, device store.Device, width int, n
 	}
 	secs := int(left.Round(time.Second).Seconds())
 	clock := fmt.Sprintf("%d:%02d", secs/60, secs%60)
-	big, _ := blockText(clock, 8)
-	for i := 0; i < 3; i++ {
-		row := newSpotRow(width).add(s.text, big[i])
-		if i == 1 {
-			row.add(s.fill, "   ").add(s.muted, fmt.Sprintf("seconds left of %d", int(wakeAnswerWindow.Seconds())))
+	caption := fmt.Sprintf("seconds left of %d", int(wakeAnswerWindow.Seconds()))
+	barRow := lay.factsRow + 4
+	if lay.plain {
+		lines[lay.factsRow] = newSpotRow(width).add(s.bold, clock).add(s.fill, "   ").add(s.muted, fitText(caption, width-len(clock)-3)).String(s.fill)
+		barRow = lay.factsRow + 2
+	} else {
+		big, _ := blockText(clock, 8)
+		for i := 0; i < 3; i++ {
+			row := newSpotRow(width).add(s.text, big[i])
+			if i == 1 {
+				row.add(s.fill, "   ").add(s.muted, caption)
+			}
+			lines[lay.factsRow+i] = row.String(s.fill)
 		}
-		lines[lay.factsRow+i] = row.String(s.fill)
 	}
 
 	barW := min(width, spotMeasure)
@@ -636,7 +744,7 @@ func (m *WakeModel) spotWaking(lines []string, device store.Device, width int, n
 		done = int(float64(barW) * float64(wakeAnswerWindow-left) / float64(wakeAnswerWindow))
 	}
 	bar := newSpotRow(width).add(s.amber, strings.Repeat("▄", done)).add(st.track, strings.Repeat("▄", barW-done))
-	lines[lay.factsRow+4] = bar.String(s.fill)
+	lines[barRow] = bar.String(s.fill)
 
 	route := m.privateMessage(m.routeText(device))
 	if sent {
@@ -707,6 +815,7 @@ type spotLayout struct {
 	nameRow, stateRow        int
 	typeRow                  int
 	factsRow, actionRow      int
+	plain                    bool // no block letters: phone line spacing splits them
 }
 
 const (
@@ -716,6 +825,10 @@ const (
 )
 
 func (m *WakeModel) spotLayout(width, height int) spotLayout {
+	if height < spotMinHeight {
+		// Short window: the blocks move up and the picture gives way.
+		return spotLayout{nameRow: 3, stateRow: 7, factsRow: 9, actionRow: 14}
+	}
 	lay := spotLayout{nameRow: 5, stateRow: 9, factsRow: 12, actionRow: 18}
 	if !m.artOn() {
 		return lay

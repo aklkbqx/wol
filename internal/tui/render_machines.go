@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/aklkbqx/wol/internal/store"
@@ -171,7 +170,7 @@ func (m *WakeModel) renderMachineListBounded(devices []store.Device, width int, 
 		rows = append(rows, m.theme.muted().Render(fitText(fmt.Sprintf("↑ %d above", start), rowWidth)))
 	}
 
-	now := time.Now()
+	now := m.now()
 	motionSelectActive := m.motion.Active(now) && m.motion.Stage == StageSelect
 	arrowStyled := m.theme.accent().Render(m.theme.Glyph("arrow"))
 	afterimageStyled := m.theme.accent().Render(m.theme.Glyph("afterimage"))

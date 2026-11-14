@@ -109,8 +109,8 @@ func TestSpotlightWakingCountdown(t *testing.T) {
 
 func TestSpotlightFallsBackToClassicLayout(t *testing.T) {
 	cases := map[string]func(*WakeModel){
-		"narrow": func(m *WakeModel) { m.width = 89 },
-		"short":  func(m *WakeModel) { m.height = 23 },
+		"tiny":   func(m *WakeModel) { m.width = 29 },
+		"short":  func(m *WakeModel) { m.height = 9 },
 		"ascii":  func(m *WakeModel) { m.theme = NewTheme(false, true) },
 		"routes": func(m *WakeModel) { m.tab = 1 },
 		"help":   func(m *WakeModel) { m.showHelp = true },
@@ -181,10 +181,9 @@ func BenchmarkRenderSpotlight(b *testing.B) {
 
 func BenchmarkRenderClassic100x28(b *testing.B) {
 	m := spotlightModel()
-	m.width = 89
 	b.ReportAllocs()
 	for b.Loop() {
-		_ = m.render()
+		_ = m.renderClassic(m.width)
 	}
 }
 

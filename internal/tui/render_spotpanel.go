@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/aklkbqx/wol/internal/store"
 )
@@ -29,7 +28,7 @@ const (
 // when the frame is the machine view, a form or the classic layout. The
 // order follows handleKey, so the panel shown is the one keys act on.
 func (m *WakeModel) spotPanelKind(width, height int) string {
-	if m.tab != 0 || width < spotMinWidth || height < spotMinHeight || m.theme.ASCII {
+	if !m.spotFrame(width, height).hasStage() {
 		return ""
 	}
 	switch {
@@ -60,8 +59,9 @@ func (m *WakeModel) spotPanelKind(width, height int) string {
 func (m *WakeModel) renderSpotPanel(kind string, width, height int) string {
 	st := m.theme.spot()
 	devices := m.filteredDevices()
-	stageWidth := width - spotPaneWidth - spotGutter - spotRightPad
-	pane := m.spotPane(devices, height, st)
+	f := m.spotFrame(width, height)
+	stageWidth := f.stage
+	pane := m.spotPane(devices, f, st)
 	var stage []string
 	switch kind {
 	case panelHelp:
@@ -79,7 +79,7 @@ func (m *WakeModel) renderSpotPanel(kind string, width, height int) string {
 	default:
 		stage = m.spotEmptyStage(stageWidth, height, st)
 	}
-	return spotCompose(pane, stage, width, height, st)
+	return spotCompose(pane, stage, f, st)
 }
 
 // spotHint is one key in the stage's key row.
@@ -227,6 +227,7 @@ var spotHelpKeys = [2][][2]string{
 		{"tab", "next tab"},
 		{"i  E", "import, export"},
 		{"t", "next palette"},
+		{"l", "list only, narrow window"},
 	},
 }
 
@@ -245,11 +246,11 @@ func (m *WakeModel) spotHelpStage(width, height int, st spotStyles) []string {
 	}
 	// Room for the headings, a blank row and every key.
 	last := height - 7
+	if 8+rows-1 > last || colW-keyW < 21 {
+		return m.spotHelpPages(lines, width, height, st)
+	}
 	for r := -2; r < rows; r++ {
 		y := 8 + r
-		if y > last {
-			break
-		}
 		if r == -1 {
 			continue
 		}
@@ -267,6 +268,57 @@ func (m *WakeModel) spotHelpStage(width, height int, st spotStyles) []string {
 		lines[y] = row.String(s.fill)
 	}
 	lines[height-3] = m.spotKeyRow(width, st, []spotHint{{key: "?", label: "close"}}, spotHint{key: "esc", label: "close"})
+	return lines
+}
+
+// spotHelpEntries is the key list as one run: a heading, then its keys.
+func spotHelpEntries() [][2]string {
+	heads := [2]string{"This machine", "Fleet and view"}
+	var out [][2]string
+	for c, col := range spotHelpKeys {
+		out = append(out, [2]string{"", heads[c]})
+		out = append(out, col...)
+	}
+	return out
+}
+
+// spotHelpPages draws the key list in pages when the window is too short
+// or too narrow for both columns at once. Space turns the page.
+func (m *WakeModel) spotHelpPages(lines []string, width, height int, st spotStyles) []string {
+	s := st.stage
+	entries := spotHelpEntries()
+	cols, colW := 1, min(width, 40)
+	if (width-3)/2 >= 28 {
+		cols, colW = 2, min(34, (width-3)/2)
+	}
+	const keyW = 7
+	perCol := max(1, height-11) // rows 6..height-6
+	perPage := perCol * cols
+	pages := (len(entries) + perPage - 1) / perPage
+	page := m.helpPage % pages
+	chunk := entries[page*perPage : min(len(entries), (page+1)*perPage)]
+	for r := 0; r < perCol; r++ {
+		row := newSpotRow(width)
+		for c := 0; c < cols; c++ {
+			i := c*perCol + r
+			if i >= len(chunk) {
+				break
+			}
+			x := c * (colW + 3)
+			row.to(s.fill, x)
+			if e := chunk[i]; e[0] == "" {
+				row.add(s.muted, e[1])
+			} else {
+				row.add(s.text, e[0]).to(s.fill, x+keyW).add(s.soft, fitText(e[1], colW-keyW))
+			}
+		}
+		lines[6+r] = row.String(s.fill)
+	}
+	hints := []spotHint{{key: "?", label: "close"}}
+	if pages > 1 {
+		hints = []spotHint{{key: "space", label: fmt.Sprintf("more keys %d/%d", page+1, pages), primary: true}, {key: "?", label: "close"}}
+	}
+	lines[height-3] = m.spotKeyRow(width, st, hints, spotHint{key: "esc", label: "close"})
 	return lines
 }
 
@@ -290,7 +342,7 @@ func (m *WakeModel) spotPickerItems(device store.Device) []spotPickerItem {
 func (m *WakeModel) spotPickerStage(devices []store.Device, width, height int, st spotStyles) []string {
 	s := st.stage
 	lines := spotBlankStage(width, height, st)
-	lines[1] = m.spotTabs(width, m.spotFreshness(time.Now()), m.stale, st)
+	lines[1] = m.spotTabs(width, m.spotFreshness(m.now()), m.stale, st)
 	if len(devices) == 0 {
 		lines[4] = spotTitle(width, st, "No machine selected", "")
 		lines[height-3] = m.spotKeyRow(width, st, nil, spotHint{key: "esc", label: "close"})

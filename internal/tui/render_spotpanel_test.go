@@ -59,8 +59,8 @@ func TestSpotPanelsDrawExactFrames(t *testing.T) {
 
 func TestSpotPanelsFallBackToClassicLayout(t *testing.T) {
 	cases := map[string]func(*WakeModel){
-		"narrow help":   func(m *WakeModel) { m.showHelp = true; m.width = 89 },
-		"short picker":  func(m *WakeModel) { m.actionPicker = true; m.height = 23 },
+		"list help":     func(m *WakeModel) { m.showHelp = true; m.width = 49 },
+		"short picker":  func(m *WakeModel) { m.actionPicker = true; m.height = 19 },
 		"ascii confirm": func(m *WakeModel) { m.confirm = "machine:b"; m.theme = NewTheme(false, true) },
 		"route confirm": func(m *WakeModel) { m.tab = 1; m.confirm = "relay:r" },
 		"site confirm":  func(m *WakeModel) { m.confirm = "site:s" },

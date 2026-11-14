@@ -50,7 +50,7 @@ func (m *WakeModel) startPresenceScan(devices []store.Device, requestID uint64, 
 	m.checking = true
 	m.scanDone = 0
 	m.scanTotal = len(devices)
-	m.scanResults = fleet.Run(m.loadContext, devices, m.sites, 16, fleet.Check(m.presenceDetector(), profiles))
+	m.scanResults = m.runFleet(m.loadContext, devices, m.sites, 16, fleet.Check(m.presenceDetector(), profiles))
 	m.status = fmt.Sprintf("Checking 0/%d machines. Esc cancels.", len(devices))
 	return nextFleet(m.scanResults, requestID, false)
 }

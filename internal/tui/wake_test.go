@@ -937,7 +937,7 @@ func TestWakeWaitSignalPathAnimatesContinuously(t *testing.T) {
 func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 	started := time.Unix(1_700_000_000, 0)
 	model := &WakeModel{
-		width: 88, height: 30, // classic list; Spotlight has its own waking stage
+		width: 88, height: 30, // the classic list, drawn directly; Spotlight has its own waking stage
 		theme:          NewTheme(true, false),
 		action:         "wake-wait",
 		actionTargetID: "win-1",
@@ -953,7 +953,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 			Until: started.Add(95 * time.Second),
 		},
 	}
-	view0 := model.render()
+	view0 := model.renderClassic(model.width)
 	if !strings.Contains(view0, "waking") {
 		t.Fatalf("fleet view expected to contain 'waking' during wake-wait:\n%s", view0)
 	}
@@ -963,7 +963,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 
 	// Advance frame
 	model.frame = 4
-	view4 := model.render()
+	view4 := model.renderClassic(model.width)
 	if !strings.Contains(view4, "⠹ waking") {
 		t.Fatalf("fleet view expected to contain rotated spinner frame '⠹ waking':\n%s", view4)
 	}
@@ -972,7 +972,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 	asciiModel := model
 	asciiModel.theme = NewTheme(false, true)
 	asciiModel.frame = 0
-	asciiView := asciiModel.render()
+	asciiView := asciiModel.renderClassic(asciiModel.width)
 	if !strings.Contains(asciiView, "waking") {
 		t.Fatalf("ASCII fleet view expected to contain 'waking':\n%s", asciiView)
 	}
@@ -980,7 +980,7 @@ func TestWakeWaitFleetRowShowsAnimatedSpinner(t *testing.T) {
 
 func assertViewFits(t *testing.T, model *WakeModel, width, height int) {
 	t.Helper()
-	view := model.render()
+	view := model.renderClassic(model.width)
 	if lines := len(strings.Split(strings.TrimSuffix(view, "\n"), "\n")); lines > height {
 		t.Fatalf("%dx%d uses %d lines:\n%s", width, height, lines, view)
 	}
@@ -1030,7 +1030,7 @@ func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
 	}
 
 	// Check view during shutdown
-	view := model.render()
+	view := model.renderClassic(model.width)
 	if !strings.Contains(view, "stop") && !strings.Contains(view, "stopping") {
 		t.Fatalf("expected view to contain stop/stopping animation, got:\n%s", view)
 	}
@@ -1067,7 +1067,7 @@ func TestShutdownWaitSignalPathAndAutoOffline(t *testing.T) {
 		t.Fatalf("expected status to mention unreachable after shutdown, got %q", model.status)
 	}
 
-	offlineView := model.render()
+	offlineView := model.renderClassic(model.width)
 	if !strings.Contains(offlineView, "unreachable") {
 		t.Fatalf("expected offline view to display 'unreachable', got:\n%s", offlineView)
 	}

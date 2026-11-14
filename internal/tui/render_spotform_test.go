@@ -85,7 +85,7 @@ func TestSpotFormOtherFormsAndFallbacks(t *testing.T) {
 	}
 
 	for name, setup := range map[string]func(*WakeModel){
-		"narrow": func(m *WakeModel) { m.width = 89 },
+		"list":   func(m *WakeModel) { m.width = 49 },
 		"ascii":  func(m *WakeModel) { m.theme = NewTheme(false, true) },
 		"routes": func(m *WakeModel) { m.tab = 1 },
 	} {

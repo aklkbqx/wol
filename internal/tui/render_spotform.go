@@ -13,18 +13,17 @@ import (
 // frame. Forms opened from the other tabs keep the classic layout of
 // their tab.
 func (m *WakeModel) spotFormEligible(width, height int) bool {
-	return m.form != nil && m.tab == 0 && width >= spotMinWidth && height >= spotMinHeight &&
-		!m.theme.ASCII && !m.showHelp && m.confirm == "" && !m.showBatchResults
+	return m.form != nil && m.spotFrame(width, height).hasStage() && !m.showHelp && m.confirm == "" && !m.showBatchResults
 }
 
 // renderSpotForm draws the full frame, width × height cells.
 func (m *WakeModel) renderSpotForm(width, height int) string {
 	st := m.theme.spot()
 	devices := m.filteredDevices()
-	stageWidth := width - spotPaneWidth - spotGutter - spotRightPad
-	pane := m.spotPane(devices, height, st)
-	stage := m.spotFormStage(stageWidth, height, st)
-	return spotCompose(pane, stage, width, height, st)
+	f := m.spotFrame(width, height)
+	pane := m.spotPane(devices, f, st)
+	stage := m.spotFormStage(f.stage, height, st)
+	return spotCompose(pane, stage, f, st)
 }
 
 // formField is one form label split into what the stage shows.

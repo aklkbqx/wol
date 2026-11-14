@@ -161,6 +161,8 @@ type WakeModel struct {
 	scanTotal         int
 	presenceMessages  map[string]string
 	scanResults       <-chan fleet.Result
+	fixedNow          time.Time
+	fleetRun          func(context.Context, []store.Device, []store.Site, int, fleet.Operation) <-chan fleet.Result
 	repository        *store.Store
 	service           *wakeservice.Service
 	wakeAndRemote     func(context.Context, store.Device, store.RemoteProfile) error
@@ -222,6 +224,8 @@ type WakeModel struct {
 	filter         string
 	filterInput    string
 	showHelp       bool
+	helpPage       int  // page of the Spotlight key list on a small window
+	listView       bool // l: the list alone on a window too narrow for the pane
 	form           *wakeForm
 	confirm        string
 	actionPicker   bool
@@ -306,6 +310,15 @@ func RunWakeDesk(dbPath string) error {
 	return nil
 }
 
+// now is the model's clock: the wall clock, or a fixed time where the
+// screens must not change between runs (the website demo).
+func (m *WakeModel) now() time.Time {
+	if m != nil && !m.fixedNow.IsZero() {
+		return m.fixedNow
+	}
+	return time.Now()
+}
+
 func (m *WakeModel) baseContext() context.Context {
 	if m != nil && m.rootCtx != nil {
 		return m.rootCtx
@@ -371,7 +384,7 @@ func (m *WakeModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.prependWakeAttempt(value.result.Attempt)
 			m.status = fmt.Sprintf("%s · packet sent via %s (%d). Waiting for power...", value.targetName, routeLabel(value.result.Route), value.result.Attempt.Packets)
 			m.action = "wake-wait"
-			m.wakeSentAt = time.Now()
+			m.wakeSentAt = m.now()
 			motionCmd := m.triggerMotion(StageSignal, wakeAnswerWindow+5*time.Second, 0, 0)
 			return m, tea.Batch(m.verifyWake(value.operationID, value.result.Device), motionCmd, m.clockTick())
 		}
@@ -392,7 +405,7 @@ func (m *WakeModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if value.status == "online" {
 			m.presence[value.targetID] = "online"
 			m.ensureCheckedDevice()
-			m.checkedDevice[value.targetID] = time.Now()
+			m.checkedDevice[value.targetID] = m.now()
 			m.status = value.targetName + " · ONLINE after wake."
 		} else {
 			m.status = value.targetName + " · packet sent, but the machine is not online yet. Press s to check again."
@@ -415,7 +428,7 @@ func (m *WakeModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ensurePresence()
 			m.presence[value.targetID] = "online"
 			m.ensureCheckedDevice()
-			m.checkedDevice[value.targetID] = time.Now()
+			m.checkedDevice[value.targetID] = m.now()
 			if profile, ok := m.profiles[value.targetID]; ok && streamProfile(profile) {
 				m.ensureStreaming()
 				m.streaming[value.targetID] = true
@@ -457,7 +470,7 @@ func (m *WakeModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.checkedDevice == nil {
 				m.checkedDevice = make(map[string]time.Time)
 			}
-			m.checkedDevice[value.deviceID] = time.Now()
+			m.checkedDevice[value.deviceID] = m.now()
 			status := strings.ToUpper(value.status)
 			if value.method != "" && value.method != "none" {
 				status += " via " + value.method
@@ -498,7 +511,7 @@ func (m *WakeModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if value.id != 0 && value.id != m.motionID {
 			return m, nil
 		}
-		if m.motion.Step(time.Now()) {
+		if m.motion.Step(m.now()) {
 			m.frame = m.motion.Frame
 			return m, m.motionTick()
 		}
@@ -538,7 +551,7 @@ func (m *WakeModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if value.status == "offline" {
 			m.presence[value.targetID] = "offline"
 			m.ensureCheckedDevice()
-			m.checkedDevice[value.targetID] = time.Now()
+			m.checkedDevice[value.targetID] = m.now()
 			m.status = value.targetName + " · unreachable after shutdown; power-off is unconfirmed."
 		} else {
 			m.status = value.targetName + " · shutdown command sent, but machine is still responding. Press s to check again."
@@ -662,8 +675,11 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	if m.showHelp {
-		if keyName == "?" || keyName == "esc" || keyName == "q" {
-			m.showHelp = false
+		switch keyName {
+		case "?", "esc", "q":
+			m.showHelp, m.helpPage = false, 0
+		case " ", "space", "j", "down":
+			m.helpPage++
 		}
 		return nil
 	}
@@ -802,7 +818,15 @@ func (m *WakeModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.theme = m.theme.NextPreset()
 		m.status = "Theme: " + m.theme.PresetName()
 		return nil
+	case "l":
+		if m.tab == 0 {
+			m.listView = !m.listView
+		}
 	case "esc":
+		if m.listView {
+			m.listView = false
+			return nil
+		}
 		m.marked = make(map[string]bool)
 		m.filter = ""
 		m.selected = 0
@@ -896,7 +920,7 @@ func (m *WakeModel) move(delta int) tea.Cmd {
 
 func (m *WakeModel) triggerMotion(stage Stage, duration time.Duration, origin, dest int) tea.Cmd {
 	m.motionID++
-	m.motion.TriggerStage(time.Now(), stage, duration, origin, dest)
+	m.motion.TriggerStage(m.now(), stage, duration, origin, dest)
 	return m.motionTick()
 }
 
@@ -908,7 +932,7 @@ func (m *WakeModel) stopMotion() {
 // clockTick keeps the countdown moving when motion ticks are not running.
 // It stops on its own once the wake finishes or another action starts.
 func (m *WakeModel) clockTick() tea.Cmd {
-	if !m.waking || m.motion.Active(time.Now()) {
+	if !m.waking || m.motion.Active(m.now()) {
 		return nil
 	}
 	id := m.actionID
@@ -916,7 +940,7 @@ func (m *WakeModel) clockTick() tea.Cmd {
 }
 
 func (m *WakeModel) motionTick() tea.Cmd {
-	now := time.Now()
+	now := m.now()
 	if !m.motion.Active(now) {
 		return nil
 	}
@@ -995,6 +1019,24 @@ func (m *WakeModel) View() tea.View {
 }
 
 // render draws the current frame as a styled string.
+// spotView draws the Spotlight frame for the current state, or reports
+// false when the classic layout draws it.
+func (m *WakeModel) spotView(width, height int) (string, bool) {
+	if kind := m.spotPanelKind(width, height); kind != "" {
+		return m.renderSpotPanel(kind, width, height), true
+	}
+	if m.opening {
+		return "", false
+	}
+	if m.spotlightEligible(width, height) {
+		return m.renderSpotlight(width, height), true
+	}
+	if m.spotFormEligible(width, height) {
+		return m.renderSpotForm(width, height), true
+	}
+	return "", false
+}
+
 func (m *WakeModel) render() string {
 	width := m.width
 	if width <= 0 {
@@ -1005,19 +1047,20 @@ func (m *WakeModel) render() string {
 	if m.phase != phaseReady {
 		return m.renderLoadingView(inner, mode)
 	}
-	if kind := m.spotPanelKind(width, m.height); kind != "" {
-		return m.renderSpotPanel(kind, width, m.height)
+	if view, ok := m.spotView(width, m.height); ok {
+		return view
 	}
 	if m.opening {
 		return m.renderRemoteLoadingView(inner, mode)
 	}
-	if m.spotlightEligible(width, m.height) {
-		return m.renderSpotlight(width, m.height)
-	}
-	if m.spotFormEligible(width, m.height) {
-		return m.renderSpotForm(width, m.height)
-	}
+	return m.renderClassic(width)
+}
 
+// renderClassic draws the classic layout: the other tabs, ASCII and
+// windows too small for any Spotlight frame.
+func (m *WakeModel) renderClassic(width int) string {
+	inner := contentWidth(width)
+	mode := ResolveLayout(width, m.height)
 	var builder strings.Builder
 	var headerParts []string
 	headerParts = append(headerParts, m.brandMark())
@@ -1088,7 +1131,7 @@ func (m *WakeModel) render() string {
 	showStatus := m.height <= 0 || m.height >= 22 || m.loading || m.waking || m.opening || m.shuttingDown || m.checking || statusNeedsAttention(m.status)
 	if m.status != "" && showStatus {
 		status := m.privateMessage(m.status)
-		if m.motion.Active(time.Now()) && m.motion.Stage == StageSignal {
+		if m.motion.Active(m.now()) && m.motion.Stage == StageSignal {
 			frames := []string{"·", "o", "O", "o"}
 			if m.theme.ASCII {
 				frames = []string{".", "..", "...", "...."}

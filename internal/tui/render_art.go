@@ -350,8 +350,8 @@ func (m *WakeModel) withArt(cmd tea.Cmd) tea.Cmd {
 	if !m.artOn() {
 		return cmd
 	}
-	if m.phase == phaseReady && !m.opening && m.spotlightEligible(m.width, m.height) {
-		m.renderSpotlight(m.width, m.height)
+	if m.phase == phaseReady {
+		m.spotView(m.width, m.height)
 	}
 	extra := m.art.flush(m.baseContext())
 	if len(extra) == 0 {

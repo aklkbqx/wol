@@ -2,7 +2,7 @@
 
 Go 1.26.9 or newer is required. The preferred release toolchain is Go 1.27.2.
 Versions are pinned in go.mod/go.sum; use a current security patch release.
-The current TUI uses Bubble Tea v1; do not copy v2 APIs into this codebase.
+The TUI uses Bubble Tea, Lip Gloss and Bubbles v2 (`charm.land/*/v2`).
 
 ```sh
 make verify
@@ -24,6 +24,17 @@ Schema changes are additive and old imports are accepted. Export version 6 adds
 site subnet, default relay and probe settings. Test migration, import/export
 round trips, explicit remote overrides, cancellation, terminal widths and 100
 machines across multiple sites.
+
+## Website demo
+
+`go run ./cmd/wol-sitedemo --out demo.json` records the terminal UI for the
+website. It drives the real Wake Desk with key presses on a sample inventory
+(documentation addresses 198.51.100.0/24 and 203.0.113.0/24, locally
+administered MACs) and writes every distinct screen with the keys that lead
+from it, for 100x28 and 40x36 by default (`--sizes`). Wakes, checks, connects
+and batches are played back by stubs: nothing is sent on the network, nothing
+is saved, and forms move between fields but never submit. The clock is fixed,
+so two runs write the same file. Regenerate it after a change to the TUI.
 
 ## Local packaging
 

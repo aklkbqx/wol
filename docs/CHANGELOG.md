@@ -1,7 +1,7 @@
 # 0.4.20 (unreleased)
 
 - Move the terminal UI to Bubble Tea, Lip Gloss and Bubbles v2 and open the
-  Machines tab in Spotlight at 90×24 or larger: a machine list beside one
+  Machines tab in Spotlight: a machine list beside one
   large stage with the name in block letters, the facts, one main action and
   a live countdown while a wake waits for an answer (#21).
 - Draw machine pictures in the stage: a night room with the machine lit,
@@ -19,6 +19,17 @@
   and results, the first run with no machines and the wake-and-connect launch
   in Spotlight as well. Delete names the machine and says what it removes;
   batch results count sent, failed and cancelled machines (#21).
+- Keep Spotlight on small windows instead of falling back to the classic
+  layout: a narrower list from 72 columns, the stage alone from 50 columns with
+  the neighbouring machines named and `l` for the list, and the list alone
+  below 50 columns or 20 rows. Panels and forms follow the same frames, and
+  the key list turns pages with `space` when it does not fit (#21).
+- Lay Spotlight out for phones. Upright, from 36 columns and 30 rows, the
+  stage stacks: the picture on top, the name and wake countdown in plain bold
+  instead of block letters, buttons three rows tall, the neighbouring
+  machines, and a status that wraps to two lines instead of being cut. On its
+  side, from 90 columns and 16 rows, the list shows the focused machine
+  beside it. The four tabs fit from 40 columns (#21).
 
 # 0.4.19 — 2026-11-08
 

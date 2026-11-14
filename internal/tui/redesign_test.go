@@ -25,7 +25,7 @@ func TestPatchbaySplitLayoutRendersShearedFramesAndBatchMarks(t *testing.T) {
 	}
 
 	assertViewFits(t, model, 88, 32)
-	plain := stripANSI(model.render())
+	plain := stripANSI(model.renderClassic(model.width))
 	for _, want := range []string{"FLEET", "PATCHBAY", "[✓]", "[ ]", "1 marked", "W", "S"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("patchbay split view missing %q:\n%s", want, plain)
@@ -34,7 +34,7 @@ func TestPatchbaySplitLayoutRendersShearedFramesAndBatchMarks(t *testing.T) {
 
 	model.theme = NewTheme(false, true)
 	assertViewFits(t, model, 88, 32)
-	asciiPlain := stripANSI(model.render())
+	asciiPlain := stripANSI(model.renderClassic(model.width))
 	for _, want := range []string{"[x]", "[ ]", "1 marked"} {
 		if !strings.Contains(asciiPlain, want) {
 			t.Fatalf("ASCII patchbay split view missing %q:\n%s", want, asciiPlain)
@@ -61,7 +61,7 @@ func TestPatchbayInspectorShowsTopologySparklineAndMachineHistory(t *testing.T) 
 	}
 
 	assertViewFits(t, model, 88, 34)
-	plain := stripANSI(model.render())
+	plain := stripANSI(model.renderClassic(model.width))
 	for _, want := range []string{"en0", "198.51.100.255:9", "02:00:00:00:02:10", "PULSE", "sent"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("inspector missing %q:\n%s", want, plain)

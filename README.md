@@ -147,10 +147,25 @@ Run any command with `-h` for its full flag list.
 | `t` | Cycle the color theme (`Night Room`, `Brass Night`, `Catppuccin Mocha`, `Tokyo Night`, `Gruvbox Dark`, `Daylight Paper`) |
 | `/`, `?`, `q` | Filter, help, quit |
 
-`Esc` cancels a running check or batch. The layout adapts to narrow, compact
-and wide terminals. At 90×24 or larger the Machines tab opens in Spotlight: a
+`Esc` cancels a running check or batch. The Machines tab opens in Spotlight: a
 machine list on the left and one large stage for the focused machine, with a
-live countdown while a wake waits for the machine to answer.
+live countdown while a wake waits for the machine to answer. It follows the
+window size:
+
+| Window | Layout |
+| --- | --- |
+| 90 columns or wider | Full list beside the stage; a picture of the machine from 24 rows |
+| 72 to 89 columns | A narrower list; the facts stack in one column |
+| 50 to 71 columns | The stage alone, naming the machines above and below; `l` shows the list |
+| 36 to 71 columns, 30 rows or more, as tall as wide or taller | Portrait: the picture on top, the name in plain bold, the facts, buttons three rows tall, the machines above and below |
+| Under 50 columns or 20 rows | The list alone, each machine's state in words; from 90 columns and 16 rows the focused machine shows beside it |
+
+Under 30×10, with `WOL_TUI_ASCII=1` and on the other tabs, the classic layout is
+used. On a short window `?` shows the keys in pages; `space` turns the page.
+
+On a phone SSH app, set the line spacing to 1.0 if the picture shows gaps
+between rows, or turn pictures off with `WOL_TUI_IMAGES=off`. The portrait
+layout avoids block letters, which the same spacing splits apart.
 
 Display options:
 

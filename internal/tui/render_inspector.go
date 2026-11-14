@@ -379,6 +379,6 @@ func signalPath(steps []string, position int, ascii bool) string {
 }
 
 func (m *WakeModel) renderActionPath(steps []string, width int) string {
-	path := signalPath(steps, m.pathPositionAt(time.Now()), m.theme.ASCII)
+	path := signalPath(steps, m.pathPositionAt(m.now()), m.theme.ASCII)
 	return fitText(m.theme.accent().Render(path), width)
 }

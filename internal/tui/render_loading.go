@@ -228,7 +228,7 @@ func (m *WakeModel) loadingSignal(width int) string {
 	}
 	railWidth = min(railWidth, 30)
 	railRune, signalRune := m.theme.Glyph("rail"), m.theme.Glyph("signal-ready")
-	position := railPosition(time.Now(), m.motion, railWidth)
+	position := railPosition(m.now(), m.motion, railWidth)
 	rail := strings.Repeat(railRune, position) + signalRune + strings.Repeat(railRune, railWidth-position-1)
 	return m.theme.muted().Render(left+" ") + m.theme.accent().Render(rail) + m.theme.muted().Render(" "+right)
 }

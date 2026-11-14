@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/aklkbqx/wol/internal/fleet"
@@ -43,7 +42,7 @@ func (m *WakeModel) applyFleetMsg(msg fleetMsg) tea.Cmd {
 	}
 	if msg.done {
 		m.checking = false
-		m.checkedAt = time.Now()
+		m.checkedAt = m.now()
 		m.finishLoadContext()
 		m.status = fmt.Sprintf("Checked %d/%d machines. Unreachable does not prove power is off.", m.scanDone, m.scanTotal)
 		return nil
@@ -68,7 +67,7 @@ func (m *WakeModel) applyFleetMsg(msg fleetMsg) tea.Cmd {
 			m.presence[r.DeviceID] = r.Status
 			m.presenceMethod[r.DeviceID] = r.Method
 			m.presenceMessages[r.DeviceID] = r.Message
-			m.checkedDevice[r.DeviceID] = time.Now()
+			m.checkedDevice[r.DeviceID] = m.now()
 		}
 	}
 	if selectedID != "" {
@@ -126,6 +125,16 @@ func (m *WakeModel) prepareBatch(kind string) {
 	m.batchKind = kind
 	m.status = fmt.Sprintf("Review %s for %d machines across sites. Enter confirms; Esc cancels.", kind, len(m.batchTargets))
 }
+
+// runFleet starts a batch or presence scan. fleetRun replaces fleet.Run
+// where nothing may reach the network, as in the website demo.
+func (m *WakeModel) runFleet(ctx context.Context, devices []store.Device, sites []store.Site, workers int, op fleet.Operation) <-chan fleet.Result {
+	if m.fleetRun != nil {
+		return m.fleetRun(ctx, devices, sites, workers, op)
+	}
+	return fleet.Run(ctx, devices, sites, workers, op)
+}
+
 func (m *WakeModel) startBatch() tea.Cmd {
 	if len(m.batchTargets) == 0 {
 		return nil
@@ -148,7 +157,7 @@ func (m *WakeModel) startBatch() tea.Cmd {
 	if m.batchKind == "wake" {
 		op = fleet.Wake(m.service)
 	}
-	results := fleet.Run(ctx, append([]store.Device(nil), m.batchTargets...), append([]store.Site(nil), m.sites...), 16, op)
+	results := m.runFleet(ctx, append([]store.Device(nil), m.batchTargets...), append([]store.Site(nil), m.sites...), 16, op)
 	return nextFleet(results, m.batchID, true)
 }
 func (m *WakeModel) retryBatch() {
