@@ -57,18 +57,99 @@ truecolor terminal the stage shows a picture of the machine instead of the lamp.
 A sleeping machine shows `unreachable`. That is the normal state before a wake,
 not an error: WOL reports power state and wake readiness separately.
 
+## Step by step
+
+Setup takes three steps and you do it once. After that, waking a machine is one key.
+
+**1. Enable Wake on LAN on the machine you want to wake.** Turn it on in the
+BIOS/UEFI power settings (some boards call it "Power On by PCI-E") and connect
+the machine by Ethernet. On Windows, also turn on "Wake on Magic Packet" in the
+network adapter's settings.
+
+![Enable Wake on LAN in the BIOS and plug in Ethernet](docs/media/step1-enable-wol.gif)
+
+**2. Install `wol` on the computer you wake from**, then run `wol doctor`.
+
+| System | Install |
+|--------|---------|
+| macOS, Linux | `brew install aklkbqx/wol/wol` |
+| macOS, Linux without Homebrew | [curl script](#macos-and-linux-without-homebrew) |
+| Windows | [PowerShell script](#windows) |
+
+**3. Add your machines.** Open Wake Desk with `wol`, press `a`, fill in the
+name, MAC address and IP address, then press `ctrl+s`. Press `n` instead to
+pick machines from your LAN neighbors, or run `wol scan --add`.
+
+![Press a in Wake Desk, type the machine and save it](docs/media/step3-add-machines.gif)
+
+**4. Wake.** Pick a machine and press `w`. WOL sends the magic packet, then
+counts down until the machine answers.
+
+![Press w; the countdown runs until the machine answers](docs/media/step4-wake.gif)
+
+**5. Wake & Remote.** Press `c` instead to wake the machine if needed, wait for
+it, then open RDP, SSH, VNC or Moonlight. Set the protocol once with `p`.
+
+![Press c to wake the machine and open its stream](docs/media/step5-wake-and-remote.gif)
+
+<sub>Recorded from Wake Desk with sample machines and documentation addresses;
+no packets were sent. The key pressed and what it did are shown under the
+screen. Wake Desk is keyboard-only.</sub>
+
 ## Install
 
-On macOS and Linux with [Homebrew](https://brew.sh):
+### macOS and Linux with Homebrew
 
 ```sh
 brew install aklkbqx/wol/wol
+wol doctor
 ```
 
-Or download the archive for your system from
-[Releases](https://github.com/aklkbqx/wol/releases/latest), verify it against
-`SHA256SUMS`, extract it and put `wol` on your `PATH`. Each release lists the
-platforms that were actually tested.
+### macOS and Linux without Homebrew
+
+This downloads the latest release for your system, checks it against
+`SHA256SUMS` and installs it to `~/.local/bin`:
+
+```sh
+v=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/aklkbqx/wol/releases/latest); v=${v##*/v}
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+case $(uname -m) in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
+f="wol_${v}_${os}_${arch}.tar.gz"
+curl -fLO "https://github.com/aklkbqx/wol/releases/download/v$v/$f"
+curl -fLO "https://github.com/aklkbqx/wol/releases/download/v$v/SHA256SUMS"
+if command -v sha256sum >/dev/null; then sum=sha256sum; else sum='shasum -a 256'; fi
+grep " $f\$" SHA256SUMS | $sum -c
+tar -xzf "$f" wol && mkdir -p ~/.local/bin && install -m 755 wol ~/.local/bin/wol
+~/.local/bin/wol doctor
+```
+
+Add `~/.local/bin` to your `PATH` if your shell does not already include it.
+
+### Windows
+
+In PowerShell (64-bit Windows):
+
+```powershell
+$v = (Invoke-RestMethod https://api.github.com/repos/aklkbqx/wol/releases/latest).tag_name.TrimStart('v')
+$f = "wol_${v}_windows_amd64.zip"
+$base = "https://github.com/aklkbqx/wol/releases/download/v$v"
+Invoke-WebRequest "$base/$f" -OutFile $f
+Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
+$want = ((Select-String -Path SHA256SUMS -Pattern " $f$").Line -split '\s+')[0]
+if ((Get-FileHash $f -Algorithm SHA256).Hash -ne $want) { throw 'Checksum mismatch' }
+$dir = "$env:LOCALAPPDATA\Programs\wol"
+Expand-Archive $f -DestinationPath $dir -Force
+[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ";$dir", 'User')
+& "$dir\wol.exe" doctor
+```
+
+Open a new terminal afterwards so `wol` is on your `PATH`.
+
+### Other options
+
+You can also download the archive for your system from
+[Releases](https://github.com/aklkbqx/wol/releases/latest) by hand. Each
+release lists the platforms that were actually tested.
 
 Releases from v0.4.16 also ship `SHA256SUMS.sig`, an Ed25519 signature over the
 checksums. [Release signing](docs/release-signing.md) explains how to check it.
