@@ -13,32 +13,10 @@ list is a local SQLite file. There is no account, server or background service.
 **Website:** [wol.aklkbqx.com](https://wol.aklkbqx.com) walks through one wake
 with a real Wake Desk recording, in English and Thai.
 
-```text
-   ● wol  all sites                 Machines   Routes   Activity   Sites           not checked yet
+![Wake Desk with five sample machines; nas-vault is selected and asleep](docs/media/wake-desk.png)
 
-
-   MACHINES                  2
-                                   ▄████▄   █▀▄ ▄▀▄ ▄▀▀
-   ● studio                        ██████   █ █ █▀█  ▀▄
-                                   ▀████▀   ▀ ▀ ▀ ▀ ▀▀
-   ○ nas
-                                   asleep   no answer on the last check
-
-
-                                   address                        hardware
-                                   198.51.100.20                  02:00:00:00:00:02
-                                   wakes by                       checks
-                                   broadcast 198.51.100.255:9     tcp:445
-
-
-                                     w   Wake nas      c  wake and connect    s  check
-
-
-   1 awake  1 asleep                ↑↓  move    space  mark    /  filter    ?  all keys    q  quit
-```
-
-<sub>Wake Desk Spotlight without color, with sample machines and documentation addresses. In a
-truecolor terminal the stage shows a picture of the machine instead of the lamp.</sub>
+<sub>Wake Desk, captured from the real renderer with sample machines and
+documentation addresses.</sub>
 
 ## What it does
 
