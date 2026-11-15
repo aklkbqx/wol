@@ -48,11 +48,11 @@ network adapter's settings.
 
 **2. Install `wol` on the computer you wake from**, then run `wol doctor`.
 
-| System | Install |
-|--------|---------|
-| macOS, Linux | `brew install aklkbqx/wol/wol` |
-| macOS, Linux without Homebrew | [curl script](#macos-and-linux-without-homebrew) |
-| Windows | [PowerShell script](#windows) |
+```sh
+brew install aklkbqx/wol/wol        # macOS, Linux
+```
+
+Other ways, including Windows, are under [Install](#install).
 
 **3. Add your machines.** Open Wake Desk with `wol`, press `a`, fill in the
 name, MAC address and IP address, then press `ctrl+s`. Press `n` instead to
@@ -76,52 +76,28 @@ screen. Wake Desk is keyboard-only.</sub>
 
 ## Install
 
-### macOS and Linux with Homebrew
+**macOS and Linux**
 
 ```sh
 brew install aklkbqx/wol/wol
-wol doctor
 ```
 
-### macOS and Linux without Homebrew
-
-This downloads the latest release for your system, checks it against
-`SHA256SUMS` and installs it to `~/.local/bin`:
+or, without Homebrew:
 
 ```sh
-v=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/aklkbqx/wol/releases/latest); v=${v##*/v}
-os=$(uname -s | tr '[:upper:]' '[:lower:]')
-case $(uname -m) in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; esac
-f="wol_${v}_${os}_${arch}.tar.gz"
-curl -fLO "https://github.com/aklkbqx/wol/releases/download/v$v/$f"
-curl -fLO "https://github.com/aklkbqx/wol/releases/download/v$v/SHA256SUMS"
-if command -v sha256sum >/dev/null; then sum=sha256sum; else sum='shasum -a 256'; fi
-grep " $f\$" SHA256SUMS | $sum -c
-tar -xzf "$f" wol && mkdir -p ~/.local/bin && install -m 755 wol ~/.local/bin/wol
-~/.local/bin/wol doctor
+curl -fsSL https://raw.githubusercontent.com/aklkbqx/wol/main/install.sh | sh
 ```
 
-Add `~/.local/bin` to your `PATH` if your shell does not already include it.
-
-### Windows
-
-In PowerShell (64-bit Windows):
+**Windows** (PowerShell)
 
 ```powershell
-$v = (Invoke-RestMethod https://api.github.com/repos/aklkbqx/wol/releases/latest).tag_name.TrimStart('v')
-$f = "wol_${v}_windows_amd64.zip"
-$base = "https://github.com/aklkbqx/wol/releases/download/v$v"
-Invoke-WebRequest "$base/$f" -OutFile $f
-Invoke-WebRequest "$base/SHA256SUMS" -OutFile SHA256SUMS
-$want = ((Select-String -Path SHA256SUMS -Pattern " $f$").Line -split '\s+')[0]
-if ((Get-FileHash $f -Algorithm SHA256).Hash -ne $want) { throw 'Checksum mismatch' }
-$dir = "$env:LOCALAPPDATA\Programs\wol"
-Expand-Archive $f -DestinationPath $dir -Force
-[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ";$dir", 'User')
-& "$dir\wol.exe" doctor
+irm https://raw.githubusercontent.com/aklkbqx/wol/main/install.ps1 | iex
 ```
 
-Open a new terminal afterwards so `wol` is on your `PATH`.
+Then run `wol doctor`. The scripts download the latest release, check it
+against `SHA256SUMS` and install `wol` to `~/.local/bin` or
+`%LOCALAPPDATA%\Programs\wol`. Read [install.sh](install.sh) and
+[install.ps1](install.ps1) first if you prefer.
 
 ### Other options
 
