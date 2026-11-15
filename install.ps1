@@ -10,9 +10,25 @@
     $ProgressPreference = 'SilentlyContinue'
     $repo = 'https://github.com/aklkbqx/wol'
 
+    function Get-Release([string]$url, [string]$out) {
+        try {
+            Invoke-WebRequest $url -OutFile $out -UseBasicParsing
+        } catch {
+            $status = $_.Exception.Response.StatusCode.value__
+            if ($status -eq 404) {
+                throw "wol install: release v$version or its Windows archive was not found. See $repo/releases"
+            }
+            throw "wol install: download failed: $url ($($_.Exception.Message))"
+        }
+    }
+
     $version = $env:WOL_VERSION
     if (-not $version) {
-        $version = (Invoke-RestMethod 'https://api.github.com/repos/aklkbqx/wol/releases/latest').tag_name
+        try {
+            $version = (Invoke-RestMethod 'https://api.github.com/repos/aklkbqx/wol/releases/latest').tag_name
+        } catch {
+            throw "wol install: could not reach GitHub to find the latest release ($($_.Exception.Message))"
+        }
     }
     $version = $version.TrimStart('v')
     $file = "wol_${version}_windows_amd64.zip"
@@ -25,8 +41,8 @@
         Write-Host "Downloading wol $version for windows/amd64"
         $zip = Join-Path $tmp $file
         $sums = Join-Path $tmp 'SHA256SUMS'
-        Invoke-WebRequest "$base/$file" -OutFile $zip
-        Invoke-WebRequest "$base/SHA256SUMS" -OutFile $sums
+        Get-Release "$base/$file" $zip
+        Get-Release "$base/SHA256SUMS" $sums
 
         $row = Get-Content $sums | Where-Object { ($_ -split '\s+')[1] -eq $file }
         if (-not $row) { throw "$file is not listed in SHA256SUMS" }
