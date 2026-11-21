@@ -1,0 +1,40 @@
+version: 1
+project: wol
+registry: ghcr.io/aklkbqx
+
+git:
+  requireClean: true
+  tagPromotion:
+    promoteLatest: true
+
+build:
+  builder: auto
+  cacheMode: min
+  platform: linux/amd64
+
+environments:
+  production:
+    host: private
+    registryMode: oci
+    minFreeDiskMb: 512
+    keepImages: 5
+
+services:
+  site:
+    preset: static-nginx
+    image: wol-site
+    dockerfile: site/Dockerfile
+    context: site
+    watchPaths:
+      - "site/**"
+    composeDir: /root/apps/akalakkruaboon@gmail.com/aklkbqx.com/wol
+    composeProject: wol-site
+    composeService: wol-site
+    imageVar: SITE_IMAGE
+    minFreeMb: 128
+    internalProbe:
+      port: 80
+      path: /healthz
+    verify:
+      url: https://wol.aklkbqx.com/healthz
+      consecutiveOk: 3
