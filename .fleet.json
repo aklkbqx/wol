@@ -1,0 +1,12 @@
+{
+  "name": "wol",
+  "defaultProfile": "site",
+  "profiles": {
+    "site": {
+      "subdir": "site",
+      "installCmd": "bun install --frozen-lockfile",
+      "devCmd": "bun run dev",
+      "forwardPorts": [4173]
+    }
+  }
+}
