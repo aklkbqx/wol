@@ -18,6 +18,12 @@ environments:
     registryMode: oci
     minFreeDiskMb: 512
     keepImages: 5
+    gates:
+      preBuild:
+        - name: build-site-dist
+          services: [site]
+          runLocal: "bun run build"
+          cwd: site
 
 services:
   site:
@@ -25,6 +31,7 @@ services:
     image: wol-site
     dockerfile: site/Dockerfile
     context: site
+    previousImageFromLedger: true
     watchPaths:
       - "site/**"
     composeDir: /root/apps/akalakkruaboon@gmail.com/aklkbqx.com/wol
@@ -32,9 +39,13 @@ services:
     composeService: wol-site
     imageVar: SITE_IMAGE
     minFreeMb: 128
+    drain:
+      cmd: "touch /tmp/ship-drain"
+      wait: 6s
     internalProbe:
       port: 80
       path: /healthz
     verify:
-      url: https://wol.aklkbqx.com/healthz
+      url: https://wol.aklkbqx.com/version.json
+      releaseJsonPath: release
       consecutiveOk: 3
