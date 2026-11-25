@@ -6,7 +6,22 @@
       "subdir": "site",
       "installCmd": "bun install --frozen-lockfile",
       "devCmd": "bun run dev",
-      "forwardPorts": [4173]
+      "forwardPorts": [
+        4173
+      ]
     }
+  },
+  "pipelines": {
+    "verify": [
+      {
+        "name": "go-test",
+        "cmd": "go test ./..."
+      },
+      {
+        "name": "site-test",
+        "subdir": "site",
+        "cmd": "bun run test"
+      }
+    ]
   }
 }
